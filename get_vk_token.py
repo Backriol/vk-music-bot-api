@@ -86,8 +86,9 @@ def check_audio(token: str, user_agent: str) -> bool:
     return True
 
 
-def main():
-    print("Получение токена ВКонтакте для музыкального бота\n")
+def obtain_vk_token():
+    """Спрашивает логин/пароль и возвращает (token, user_agent) или None."""
+    print("Получение токена ВКонтакте\n")
     login = input("Логин ВК (телефон или почта): ").strip()
     password = getpass.getpass("Пароль ВК (при вводе не отображается): ")
 
@@ -95,13 +96,20 @@ def main():
         print(f"\nПробую через «{client['name']}»…")
         token = get_token(client, login, password)
         if token and check_audio(token, client["user_agent"]):
-            print("\n✅ Готово! Вставьте эти две строки в файл .env (замените старые):\n")
-            print(f"VK_TOKEN={token}")
-            print(f"VK_USER_AGENT={client['user_agent']}")
-            print("\nНикому не показывайте токен — это доступ к вашему аккаунту ВК.")
-            return
+            return token, client["user_agent"]
+    return None
 
-    print("\n❌ Не получилось получить токен. Скопируйте текст выше и покажите его Claude.")
+
+def main():
+    result = obtain_vk_token()
+    if not result:
+        print("\n❌ Не получилось получить токен. Скопируйте текст выше и покажите его Claude.")
+        return
+    token, user_agent = result
+    print("\n✅ Готово! Вставьте эти две строки в файл .env (замените старые):\n")
+    print(f"VK_TOKEN={token}")
+    print(f"VK_USER_AGENT={user_agent}")
+    print("\nНикому не показывайте токен — это доступ к вашему аккаунту ВК.")
 
 
 if __name__ == "__main__":

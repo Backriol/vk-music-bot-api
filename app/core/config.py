@@ -15,9 +15,9 @@ class Settings(BaseSettings):
     vk_token: str
     vk_user_agent: str
     
-    # MongoDB
-    mongo_url: str
-    db_name: str
+    # MongoDB. Пусто — временная база в памяти (история сбрасывается при перезапуске)
+    mongo_url: str = ""
+    db_name: str = "music_bot_db"
     
     # Application
     app_host: str = "0.0.0.0"

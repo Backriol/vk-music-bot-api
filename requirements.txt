@@ -7,3 +7,4 @@ python-dotenv==1.2.1
 aiohttp==3.11.11
 vkpymusic==3.5.1
 aiogram==3.24.0
+mongomock-motor==0.0.36
