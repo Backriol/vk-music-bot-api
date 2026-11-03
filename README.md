@@ -114,12 +114,17 @@ python -m app.bot
 2. Создайте нового бота командой `/newbot`
 3. Скопируйте полученный токен в `.env`
 
-### VK Admin Token
+### VK Token
 
-1. Перейдите на [vkhost.github.io](https://vkhost.github.io/)
-2. Выберите **VK Admin**
-3. Авторизуйтесь
-4. Скопируйте токен в `.env`
+Приложения на vkhost.github.io (VK Admin, Kate Mobile) VK заблокировал
+(`application is blocked`). Получите токен по логину и паролю:
+
+```bash
+python get_vk_token.py
+```
+
+Скрипт спросит логин, пароль и код подтверждения, проверит доступ к музыке
+и выведет строки `VK_TOKEN=...` и `VK_USER_AGENT=...` для `.env`.
 
 ## 📁 Структура проекта
 
