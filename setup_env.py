@@ -4,9 +4,16 @@
 """
 from pathlib import Path
 
-from get_vk_token import obtain_vk_token
+from get_vk_token import CLIENTS, check_audio, obtain_vk_token
 
 ENV = Path(__file__).with_name(".env")
+
+
+def extract_token(text: str) -> str:
+    """Принимает и сам токен, и всю ссылку из адресной строки."""
+    if "access_token=" in text:
+        text = text.split("access_token=", 1)[1]
+    return text.split("&", 1)[0].strip()
 
 
 def ask(prompt: str, required: bool = True) -> str:
@@ -30,7 +37,20 @@ def main():
         bot_token = ask("Токен бота: ")
 
     print("\n2) Доступ к музыке ВКонтакте.")
+    print("   Если у вас уже есть токен ВК (длинная строка vk1.a.... или из ссылки")
+    print("   после access_token=) - вставьте его. Если нет - просто нажмите Enter,")
+    print("   и программа получит его по логину и паролю.")
+    pasted = ask("Готовый токен ВК (или Enter): ", required=False)
     result = None
+    if pasted:
+        token = extract_token(pasted)
+        # Токен из браузера получен через Kate Mobile — подбираем подходящую «подпись»
+        for client in reversed(CLIENTS):
+            if check_audio(token, client["user_agent"]):
+                result = (token, client["user_agent"])
+                break
+        if not result:
+            print("\n[!] С этим токеном музыка не находится. Попробуем по логину и паролю.")
     while not result:
         result = obtain_vk_token()
         if not result:
