@@ -27,16 +27,19 @@ def is_hls(url: str) -> bool:
 async def _download_direct(url: str) -> bytes:
     timeout = aiohttp.ClientTimeout(total=DOWNLOAD_TIMEOUT)
     headers = {"User-Agent": settings.vk_user_agent}
-    async with aiohttp.ClientSession(timeout=timeout, headers=headers) as session:
-        async with session.get(url) as resp:
-            if resp.status != 200:
-                raise AudioDownloadError(f"VK вернул HTTP {resp.status}")
-            data = bytearray()
-            async for chunk in resp.content.iter_chunked(64 * 1024):
-                data.extend(chunk)
-                if len(data) > MAX_FILE_SIZE:
-                    raise AudioDownloadError("Файл больше 50 МБ")
-            return bytes(data)
+    try:
+        async with aiohttp.ClientSession(timeout=timeout, headers=headers) as session:
+            async with session.get(url) as resp:
+                if resp.status != 200:
+                    raise AudioDownloadError(f"Сервер вернул HTTP {resp.status}")
+                data = bytearray()
+                async for chunk in resp.content.iter_chunked(64 * 1024):
+                    data.extend(chunk)
+                    if len(data) > MAX_FILE_SIZE:
+                        raise AudioDownloadError("Файл больше 50 МБ")
+                return bytes(data)
+    except (aiohttp.ClientError, asyncio.TimeoutError) as e:
+        raise AudioDownloadError(f"Сеть: {type(e).__name__}") from e
 
 
 async def _run_ffmpeg(url: str, codec_args: list[str]) -> bytes:

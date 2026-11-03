@@ -5,6 +5,7 @@
 from pathlib import Path
 
 from get_vk_token import CLIENTS, check_audio, obtain_vk_token
+from get_yandex_token import obtain_yandex_token
 
 ENV = Path(__file__).with_name(".env")
 
@@ -36,30 +37,48 @@ def main():
         print("  Похоже, это не токен. Он выглядит так: 1234567890:AAE...")
         bot_token = ask("Токен бота: ")
 
-    print("\n2) Доступ к музыке ВКонтакте.")
-    print("   Если у вас уже есть токен ВК (длинная строка vk1.a.... или из ссылки")
-    print("   после access_token=) - вставьте его. Если нет - просто нажмите Enter,")
-    print("   и программа получит его по логину и паролю.")
-    pasted = ask("Готовый токен ВК (или Enter): ", required=False)
-    result = None
-    if pasted:
-        token = extract_token(pasted)
-        # Токен из браузера получен через Kate Mobile — подбираем подходящую «подпись»
-        for client in reversed(CLIENTS):
-            if check_audio(token, client["user_agent"]):
-                result = (token, client["user_agent"])
-                break
-        if not result:
-            print("\n[!] С этим токеном музыка не находится. Попробуем по логину и паролю.")
-    while not result:
-        result = obtain_vk_token()
-        if not result:
-            print("\n[!] Не получилось. Проверьте логин и пароль.")
-            if input("Попробовать ещё раз? (да/нет): ").strip().lower() not in ("да", "д", "y", "yes"):
-                print("Покажите текст выше Claude — разберёмся.")
-                raise SystemExit(1)
-    vk_token, vk_user_agent = result
-    print("[OK] Доступ к музыке получен.")
+    print("\n2) Откуда брать музыку?")
+    print("   1 - Яндекс Музыка (нужна подписка Плюс для целых песен)")
+    print("   2 - ВКонтакте")
+    choice = ask("Введите 1 или 2 (Enter = 1): ", required=False) or "1"
+
+    source_lines = []
+    if choice != "2":
+        yandex_token = None
+        while not yandex_token:
+            yandex_token = obtain_yandex_token()
+            if not yandex_token:
+                if input("Попробовать ещё раз? (да/нет): ").strip().lower() not in ("да", "д", "y", "yes"):
+                    print("Покажите текст выше Claude — разберёмся.")
+                    raise SystemExit(1)
+        print("[OK] Вход в Яндекс Музыку выполнен.")
+        source_lines = ["MUSIC_SOURCE=yandex", f"YANDEX_TOKEN={yandex_token}"]
+    else:
+        print("   Если у вас уже есть токен ВК (длинная строка vk1.a.... или из ссылки")
+        print("   после access_token=) - вставьте его. Если нет - просто нажмите Enter,")
+        print("   и программа получит его по логину и паролю.")
+        pasted = ask("Готовый токен ВК (или Enter): ", required=False)
+        result = None
+        if pasted:
+            token = extract_token(pasted)
+            # Токен из браузера получен через Kate Mobile — подбираем подходящую «подпись»
+            for client in reversed(CLIENTS):
+                if check_audio(token, client["user_agent"]):
+                    result = (token, client["user_agent"])
+                    break
+            if not result:
+                print("\n[!] С этим токеном музыка не находится. Попробуем по логину и паролю.")
+        while not result:
+            result = obtain_vk_token()
+            if not result:
+                print("\n[!] Не получилось. Проверьте логин и пароль.")
+                if input("Попробовать ещё раз? (да/нет): ").strip().lower() not in ("да", "д", "y", "yes"):
+                    print("Покажите текст выше Claude — разберёмся.")
+                    raise SystemExit(1)
+        vk_token, vk_user_agent = result
+        print("[OK] Доступ к музыке получен.")
+
+        source_lines = ["MUSIC_SOURCE=vk", f"VK_TOKEN={vk_token}", f"VK_USER_AGENT={vk_user_agent}"]
 
     print("\n3) Ссылка на базу MongoDB (mongodb+srv://...).")
     print("   Если базы нет — просто нажмите Enter: история будет храниться")
@@ -69,8 +88,7 @@ def main():
     ENV.write_text(
         "\n".join([
             f"BOT_TOKEN={bot_token}",
-            f"VK_TOKEN={vk_token}",
-            f"VK_USER_AGENT={vk_user_agent}",
+            *source_lines,
             f"MONGO_URL={mongo_url}",
             "DB_NAME=music_bot_db",
             "WEBAPP_URL=",

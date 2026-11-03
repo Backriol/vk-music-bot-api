@@ -24,7 +24,7 @@ from aiogram.types import (
 from app.bot.audio import AudioDownloadError, fetch_mp3
 from app.core.config import settings
 from app.core.database import db
-from app.services.vk import vk_service
+from app.services.source import music_service
 
 logger = logging.getLogger(__name__)
 router = Router(name="music")
@@ -112,7 +112,7 @@ async def cmd_start(message: Message) -> None:
     await _save_user(message)
     text = (
         f"👋 Привет, {message.from_user.first_name}!\n\n"
-        "Я ищу музыку во ВКонтакте и присылаю MP3.\n"
+        "Я ищу музыку и присылаю MP3.\n"
         "Просто напишите название песни или исполнителя.\n\n"
         "/recommend — рекомендации по вашей истории\n"
         "/help — помощь"
@@ -135,11 +135,11 @@ async def cmd_recommend(message: Message) -> None:
         {"user_id": message.from_user.id}, sort=[("listened_at", -1)]
     )
     if last and last.get("artist") and last["artist"] != "Unknown":
-        tracks = await vk_service.search_tracks(last["artist"], limit=SEARCH_LIMIT)
+        tracks = await music_service.search_tracks(last["artist"], limit=SEARCH_LIMIT)
         tracks = [t for t in tracks if t["id"] != last.get("track_id")]
         header = f"🎯 Похожее на «{last['artist']}»:"
     else:
-        tracks = await vk_service.search_tracks("Top 100", limit=SEARCH_LIMIT)
+        tracks = await music_service.search_tracks("Top 100", limit=SEARCH_LIMIT)
         header = "🔥 Популярное:"
     await _send_results(message, tracks, header)
 
@@ -152,7 +152,7 @@ async def search(message: Message) -> None:
     if not query:
         return
     await message.bot.send_chat_action(message.chat.id, ChatAction.TYPING)
-    tracks = await vk_service.search_tracks(query, limit=SEARCH_LIMIT)
+    tracks = await music_service.search_tracks(query, limit=SEARCH_LIMIT)
     await _send_results(message, tracks, f"🔍 Результаты по запросу «{query[:100]}»:")
 
 
@@ -199,7 +199,7 @@ async def send_track(callback: CallbackQuery) -> None:
             await db.music_db.tg_audio.delete_one({"track_id": track_id})
 
     # 2. Получаем ссылку из VK и скачиваем
-    song = await vk_service.get_audio_url(track_id)
+    song = await music_service.get_audio_url(track_id)
     if not song or not song.url:
         await bot.send_message(chat_id, "🚫 Трек недоступен (удалён или ограничен правообладателем).")
         return

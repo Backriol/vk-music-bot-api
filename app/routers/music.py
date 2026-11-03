@@ -1,7 +1,7 @@
 from fastapi import APIRouter, HTTPException, Query, Path
 from fastapi.responses import RedirectResponse
 from app.models.schemas import SearchResponse, Track
-from app.services.vk import vk_service
+from app.services.source import music_service
 from urllib.parse import unquote
 import re
 
@@ -18,7 +18,7 @@ async def search(q: str = Query(..., description="Search query (artist, song tit
     if not q:
         raise HTTPException(status_code=400, detail="Empty query")
     
-    tracks = await vk_service.search_tracks(q, limit=20)
+    tracks = await music_service.search_tracks(q, limit=20)
     return {"items": tracks}
 
 @router.get("/download/{track_id}")
@@ -36,7 +36,7 @@ async def download(
         # Игнорируем запросы сегментов .ts или левые ID
         raise HTTPException(status_code=400, detail="Invalid track ID format")
 
-    song = await vk_service.get_audio_url(track_id)
+    song = await music_service.get_audio_url(track_id)
     
     if not song or not song.url:
         raise HTTPException(status_code=404, detail="Track not found or restricted")
@@ -73,18 +73,18 @@ async def recommendations(
     ```
     """
     if query:
-        tracks = await vk_service.search_tracks(query, limit)
+        tracks = await music_service.search_tracks(query, limit)
     elif track_id:
         # Находим артиста по ID трека и ищем его песни
-        song = await vk_service.get_audio_url(track_id)
+        song = await music_service.get_audio_url(track_id)
         if song:
-            tracks = await vk_service.search_tracks(song.artist, limit)
+            tracks = await music_service.search_tracks(song.artist, limit)
             # Убираем сам трек из выдачи
             tracks = [t for t in tracks if t['id'] != track_id]
         else:
             tracks = []
     else:
         # Fallback на популярное если ничего не задано
-        tracks = await vk_service.search_tracks("Top 100", limit)
+        tracks = await music_service.search_tracks("Top 100", limit)
         
     return {"items": tracks}
