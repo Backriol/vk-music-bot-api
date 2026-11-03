@@ -9,6 +9,7 @@ Backend API для Telegram Mini App, позволяющий искать и с�
 - 🎯 **Персональные рекомендации** на основе истории прослушиваний
 - 🔐 **Безопасная авторизация** через Telegram WebApp InitData
 - 📊 **История прослушиваний** для каждого пользователя
+- 🤖 **Встроенный Telegram-бот**: поиск, отправка MP3 прямо в чат, рекомендации
 
 ## 📋 Требования
 
@@ -69,7 +70,33 @@ uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
 ### Production режим
 
 ```bash
+# с --workers > 1 выключите встроенного бота (RUN_BOT=false) и запустите его отдельно: python -m app.bot
 uvicorn app.main:app --host 0.0.0.0 --port 8000 --workers 4
+```
+
+## 🤖 Telegram-бот
+
+Бот (aiogram 3) живёт в `app/bot/` и по умолчанию запускается вместе с API
+(`RUN_BOT=true`). Он использует те же `VKService` и MongoDB, поэтому история
+прослушиваний и рекомендации общие для бота и Mini App.
+
+Что умеет:
+
+- текстовое сообщение → список треков с пагинацией;
+- нажатие на трек → MP3 в чат (HLS-потоки `m3u8` собираются через ffmpeg);
+- `/recommend` → подборка по последнему прослушанному исполнителю;
+- если задан `WEBAPP_URL`, показывает кнопку «🎧 Открыть плеер» и menu button Mini App.
+
+Отправленные файлы кешируются по `file_id` (коллекция `tg_audio`), поэтому
+повторная отправка трека мгновенная.
+
+**Запуск отдельно от API** (обязательно при `uvicorn --workers > 1`, иначе
+несколько процессов будут одновременно опрашивать Telegram):
+
+```bash
+# в .env: RUN_BOT=false
+uvicorn app.main:app --host 0.0.0.0 --port 8000 --workers 4
+python -m app.bot
 ```
 
 ## 📚 Документация API
@@ -99,6 +126,7 @@ uvicorn app.main:app --host 0.0.0.0 --port 8000 --workers 4
 ```
 music-bot/
 ├── app/
+│   ├── bot/            # Telegram-бот (aiogram)
 │   ├── core/           # Конфигурация и база данных
 │   ├── models/         # Pydantic схемы
 │   ├── routers/        # API эндпоинты

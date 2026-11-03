@@ -1,9 +1,16 @@
+from typing import Optional
 from pydantic_settings import BaseSettings
 
 class Settings(BaseSettings):
     # Telegram Bot
     bot_token: str
     
+    # URL Telegram Mini App (https). Если задан — бот покажет кнопку открытия плеера
+    webapp_url: Optional[str] = None
+    # Запускать бота вместе с API (в lifespan FastAPI).
+    # При uvicorn --workers > 1 выключите и запускайте бота отдельно: python -m app.bot
+    run_bot: bool = True
+
     # VK API
     vk_token: str
     vk_user_agent: str
@@ -18,8 +25,8 @@ class Settings(BaseSettings):
     debug: bool = False
 
     # SSL
-    ssl_keyfile: str = None
-    ssl_certfile: str = None
+    ssl_keyfile: Optional[str] = None
+    ssl_certfile: Optional[str] = None
 
     class Config:
         env_file = ".env"

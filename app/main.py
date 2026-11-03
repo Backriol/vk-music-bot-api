@@ -1,6 +1,8 @@
 from fastapi import FastAPI
 from fastapi.openapi.utils import get_openapi
 from app.core.database import connect_to_mongo, close_mongo_connection
+from app.core.config import settings
+from app.bot import start_bot, stop_bot
 from app.routers import auth, music
 from contextlib import asynccontextmanager
 
@@ -8,8 +10,13 @@ from contextlib import asynccontextmanager
 async def lifespan(app: FastAPI):
     # Startup: подключаемся к БД
     await connect_to_mongo()
+    # Запускаем Telegram-бота в том же процессе
+    if settings.run_bot:
+        await start_bot()
     yield
-    # Shutdown: отключаемся
+    # Shutdown: останавливаем бота и отключаемся
+    if settings.run_bot:
+        await stop_bot()
     await close_mongo_connection()
 
 # Описания тегов с эмодзи для красоты
@@ -87,7 +94,6 @@ async def root():
 
 if __name__ == "__main__":
     import uvicorn
-    from app.core.config import settings
     
     uvicorn.run(
         "app.main:app", 
