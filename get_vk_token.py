@@ -31,6 +31,10 @@ CLIENTS = [
 ]
 
 
+class FloodError(Exception):
+    """VK временно запретил вход по паролю из-за большого числа попыток."""
+
+
 def vk_get(url: str, params: dict, user_agent: str) -> dict:
     full = url + "?" + urllib.parse.urlencode(params)
     req = urllib.request.Request(full, headers={"User-Agent": user_agent})
@@ -69,7 +73,11 @@ def get_token(client: dict, login: str, password: str):
             params["captcha_key"] = input("Символы с картинки: ").strip()
             continue
 
-        print(f"  ✗ {client['name']}: {data.get('error_description') or error or data}")
+        text = data.get("error_description") or error or str(data)
+        print(f"  [ошибка] {client['name']}: {text}")
+        if "слишком много" in text.lower() or "too many" in text.lower():
+            # Каждая новая попытка продлевает блокировку — дальше не пробуем
+            raise FloodError(text)
         return None
     return None
 
@@ -81,7 +89,7 @@ def check_audio(token: str, user_agent: str) -> bool:
         user_agent,
     )
     if "error" in data:
-        print(f"  ✗ Токен получен, но музыка недоступна: {data['error'].get('error_msg')}")
+        print(f"  [ошибка] Токен получен, но музыка недоступна: {data['error'].get('error_msg')}")
         return False
     return True
 
@@ -94,7 +102,13 @@ def obtain_vk_token():
 
     for client in CLIENTS:
         print(f"\nПробую через «{client['name']}»…")
-        token = get_token(client, login, password)
+        try:
+            token = get_token(client, login, password)
+        except FloodError:
+            print("\n[!] ВКонтакте временно запретил вход по паролю.")
+            print("    Подождите 3-6 часов и НЕ пробуйте раньше: каждая попытка")
+            print("    продлевает запрет. Потом просто запустите start снова.")
+            raise SystemExit(1)
         if token and check_audio(token, client["user_agent"]):
             return token, client["user_agent"]
     return None
@@ -103,10 +117,10 @@ def obtain_vk_token():
 def main():
     result = obtain_vk_token()
     if not result:
-        print("\n❌ Не получилось получить токен. Скопируйте текст выше и покажите его Claude.")
+        print("\n[!] Не получилось получить токен. Скопируйте текст выше и покажите его Claude.")
         return
     token, user_agent = result
-    print("\n✅ Готово! Вставьте эти две строки в файл .env (замените старые):\n")
+    print("\n[OK] Готово! Вставьте эти две строки в файл .env (замените старые):\n")
     print(f"VK_TOKEN={token}")
     print(f"VK_USER_AGENT={user_agent}")
     print("\nНикому не показывайте токен — это доступ к вашему аккаунту ВК.")

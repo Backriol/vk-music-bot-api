@@ -34,12 +34,12 @@ def main():
     while not result:
         result = obtain_vk_token()
         if not result:
-            print("\n❌ Не получилось. Проверьте логин и пароль.")
+            print("\n[!] Не получилось. Проверьте логин и пароль.")
             if input("Попробовать ещё раз? (да/нет): ").strip().lower() not in ("да", "д", "y", "yes"):
                 print("Покажите текст выше Claude — разберёмся.")
                 raise SystemExit(1)
     vk_token, vk_user_agent = result
-    print("✅ Доступ к музыке получен.")
+    print("[OK] Доступ к музыке получен.")
 
     print("\n3) Ссылка на базу MongoDB (mongodb+srv://...).")
     print("   Если базы нет — просто нажмите Enter: история будет храниться")
@@ -60,7 +60,7 @@ def main():
         ]),
         encoding="utf-8",
     )
-    print(f"\n✅ Настройки сохранены в файл {ENV.name}")
+    print(f"\n[OK] Настройки сохранены в файл {ENV.name}")
     print("   Чтобы настроить заново — удалите файл .env и запустите start.bat.\n")
 
 
