@@ -9,7 +9,12 @@ from aiogram import Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
 from aiogram.types import BotCommand, MenuButtonWebApp, WebAppInfo
 
+import time
+from datetime import datetime
+
+from app.bot.friends import router as friends_router
 from app.bot.handlers import router
+from app.core.database import db
 from app.core.config import settings
 
 logger = logging.getLogger(__name__)
@@ -19,12 +24,31 @@ _dp: Dispatcher | None = None
 _task: asyncio.Task | None = None
 
 
+_seen: dict[int, float] = {}
+
+
+async def remember_user(handler, event, data):
+    """Запоминаем имя и @username каждого пользователя — нужно для поиска друзей."""
+    u = data.get("event_from_user")
+    if u and not u.is_bot and db.music_db is not None and time.monotonic() - _seen.get(u.id, -1e9) > 600:
+        _seen[u.id] = time.monotonic()
+        await db.music_db.users.update_one(
+            {"id": u.id},
+            {"$set": {"id": u.id, "first_name": u.first_name or "", "username": u.username or "",
+                      "language_code": u.language_code or "en", "last_seen": datetime.utcnow()}},
+            upsert=True,
+        )
+    return await handler(event, data)
+
+
 def create_bot() -> tuple[Bot, Dispatcher]:
     bot = Bot(
         token=settings.bot_token.strip().strip("'\""),
         default=DefaultBotProperties(parse_mode=None),
     )
     dp = Dispatcher()
+    dp.update.outer_middleware(remember_user)
+    dp.include_router(friends_router)  # раньше общего поиска, который ловит любой текст
     dp.include_router(router)
     return bot, dp
 
@@ -35,6 +59,7 @@ async def setup_bot(bot: Bot) -> None:
         BotCommand(command="chart", description="Чарты"),
         BotCommand(command="wave", description="Моя волна — песни подряд"),
         BotCommand(command="recommend", description="Подборка списком"),
+        BotCommand(command="friends", description="Друзья и их архивы"),
         BotCommand(command="clear", description="Удалить присланные песни"),
         BotCommand(command="help", description="Помощь"),
     ])

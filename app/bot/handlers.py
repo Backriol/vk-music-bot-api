@@ -59,7 +59,8 @@ def _results_keyboard(tracks: list[dict], page: int) -> InlineKeyboardMarkup:
 
     rows = []
     for t in chunk:
-        text = f"{t['artist']} — {t['title']} ({_fmt_duration(t['duration'])})"
+        dur = f" ({_fmt_duration(t['duration'])})" if t.get("duration") else ""
+        text = f"{t['artist']} — {t['title']}{dur}"
         rows.append([InlineKeyboardButton(text=text[:64], callback_data=f"t:{t['id']}")])
 
     if pages > 1:
@@ -77,13 +78,14 @@ BTN_CHART = "📈 Чарты"
 BTN_WAVE = "🌊 Моя волна"
 BTN_MIX_OLD = "🎧 Мой микс"  # кнопка из старой клавиатуры — тоже запускает волну
 BTN_CLEAR = "🧹 Очистить чат"
+BTN_FRIENDS = "👥 Друзья"
 WAVE_SIZE = 10  # максимум треков в одном альбоме Telegram
 
 
 def _main_keyboard() -> ReplyKeyboardMarkup:
     rows = [
         [KeyboardButton(text=BTN_CHART), KeyboardButton(text=BTN_WAVE)],
-        [KeyboardButton(text=BTN_CLEAR)],
+        [KeyboardButton(text=BTN_FRIENDS), KeyboardButton(text=BTN_CLEAR)],
     ]
     if settings.webapp_url:
         rows.append([KeyboardButton(text="▶️ Открыть плеер", web_app=WebAppInfo(url=settings.webapp_url))])
@@ -126,6 +128,7 @@ async def cmd_start(message: Message) -> None:
         "Просто напишите название песни или исполнителя.\n\n"
         f"{BTN_CHART} — самые популярные песни\n"
         f"{BTN_WAVE} — песни подряд, как плейлист\n"
+        f"{BTN_FRIENDS} — друзья и их последние 50 песен\n"
         f"{BTN_CLEAR} — убрать присланные песни\n"
         "/help — помощь"
     )
@@ -206,7 +209,8 @@ async def _prepare_audio(track_id: str):
     """
     cached = await db.music_db.tg_audio.find_one({"track_id": track_id})
     if cached:
-        return cached["file_id"], {"title": cached["title"], "artist": cached["artist"], "duration": 0}, True
+        meta = {"title": cached["title"], "artist": cached["artist"], "duration": cached.get("duration", 0)}
+        return cached["file_id"], meta, True
 
     song = await music_service.get_audio_url(track_id)
     if not song or not song.url:
@@ -223,7 +227,8 @@ async def _cache_file_id(track_id: str, msg: Message, meta: dict) -> None:
     await db.music_db.tg_audio.update_one(
         {"track_id": track_id},
         {"$set": {"track_id": track_id, "file_id": msg.audio.file_id,
-                  "title": meta["title"], "artist": meta["artist"], "saved_at": datetime.utcnow()}},
+                  "title": meta["title"], "artist": meta["artist"], "duration": meta["duration"],
+                  "saved_at": datetime.utcnow()}},
         upsert=True,
     )
 
@@ -301,7 +306,7 @@ async def send_track(callback: CallbackQuery) -> None:
     if not cached:
         await _cache_file_id(track_id, msg, meta)
     await _remember_sent(chat_id, [msg.message_id], "track")
-    await _add_history(callback.from_user.id, track_id, meta["title"], meta["artist"])
+    await _add_history(callback.from_user.id, track_id, meta["title"], meta["artist"], meta["duration"])
 
 
 # ---------- Моя волна: песни альбомом, играют подряд ----------
@@ -397,6 +402,9 @@ async def _send_wave(bot, chat_id: int, user_id: int, continue_wave: bool) -> No
         if not cached:
             await _cache_file_id(t["id"], msg, meta)
     await _remember_sent(chat_id, [m.message_id for m in msgs], "wave")
+    for t, (_, meta, _c) in prepared:
+        await _add_history(user_id, t["id"], meta["title"], meta["artist"],
+                           meta["duration"] or t.get("duration", 0), source="wave")
 
     try:
         await bot.delete_message(chat_id, status.message_id)
@@ -466,13 +474,15 @@ async def search(message: Message) -> None:
     await _send_results(message, tracks, f"🔍 Результаты по запросу «{query[:100]}»:")
 
 
-async def _add_history(user_id: int, track_id: str, title: str, artist: str) -> None:
+async def _add_history(user_id: int, track_id: str, title: str, artist: str,
+                       duration: int = 0, source: str = "bot") -> None:
     # Тот же формат, что у POST /api/auth/history — рекомендации общие для бота и Mini App
     await db.music_db.history.insert_one({
         "user_id": user_id,
         "track_id": track_id,
         "title": title,
         "artist": artist or "Unknown",
+        "duration": duration or 0,
         "listened_at": datetime.utcnow(),
-        "source": "bot",
+        "source": source,
     })
