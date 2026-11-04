@@ -32,7 +32,8 @@ def create_bot() -> tuple[Bot, Dispatcher]:
 async def setup_bot(bot: Bot) -> None:
     await bot.set_my_commands([
         BotCommand(command="start", description="Начать"),
-        BotCommand(command="recommend", description="Рекомендации"),
+        BotCommand(command="chart", description="Чарты"),
+        BotCommand(command="recommend", description="Мой микс"),
         BotCommand(command="help", description="Помощь"),
     ])
     if settings.webapp_url:

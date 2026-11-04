@@ -43,6 +43,29 @@ def _artist(track) -> str:
     return ", ".join(a.name for a in (track.artists or []) if a.name) or "Unknown"
 
 
+def _to_dicts(items, limit: int) -> list[dict]:
+    tracks = []
+    seen = set()
+    for t in items:
+        if t is None or t.available is False:
+            continue
+        track_id = _to_our_id(t)
+        if track_id in seen:
+            continue
+        seen.add(track_id)
+        tracks.append({
+            "id": track_id,
+            "title": t.title or "",
+            "artist": _artist(t),
+            "duration": (t.duration_ms or 0) // 1000,
+            "cover_url": _cover(t),
+            "url_api": f"/api/music/download/{track_id}",
+        })
+        if len(tracks) >= limit:
+            break
+    return tracks
+
+
 class YandexService:
     def __init__(self) -> None:
         self._client: Optional[ClientAsync] = None
@@ -63,23 +86,42 @@ class YandexService:
             return []
 
         items = (result.tracks.results if result and result.tracks else []) or []
-        tracks = []
-        for t in items:
-            if t.available is False:
-                continue
-            track_id = _to_our_id(t)
-            tracks.append({
-                "id": track_id,
-                "title": t.title or "",
-                "artist": _artist(t),
-                "duration": (t.duration_ms or 0) // 1000,
-                "cover_url": _cover(t),
-                "url_api": f"/api/music/download/{track_id}",
-            })
-            if len(tracks) >= limit:
-                break
+        tracks = _to_dicts(items, limit)
         print(f"✅ Found {len(tracks)} tracks for query: {query}")
         return tracks
+
+    async def chart_tracks(self, limit: int = 50) -> list[dict]:
+        """Чарт Яндекс Музыки (Россия)."""
+        try:
+            client = await self.client()
+            info = await client.chart("russia")
+            shorts = info.chart.tracks if info and info.chart and info.chart.tracks else []
+            items = [ts.track for ts in shorts if ts.track]
+            if not items and shorts:  # треки пришли без подробностей — догружаем
+                items = await client.tracks([ts.track_id for ts in shorts[:limit]])
+        except Exception as e:
+            print(f"Yandex Music chart error: {e}")
+            return []
+        return _to_dicts(items, limit)
+
+    async def my_mix(self, limit: int = 30) -> list[dict]:
+        """Персональная «Моя волна» пользователя."""
+        try:
+            client = await self.client()
+            items, queue = [], None
+            for _ in range(4):  # станция отдаёт по несколько треков за запрос
+                res = await client.rotor_station_tracks("user:onyourwave", queue=queue)
+                batch = [s.track for s in (res.sequence if res else []) if s.track]
+                if not batch:
+                    break
+                items.extend(batch)
+                queue = batch[-1].id
+                if len(items) >= limit:
+                    break
+        except Exception as e:
+            print(f"Yandex Music wave error: {e}")
+            return []
+        return _to_dicts(items, limit)
 
     async def get_audio_url(self, track_id: str) -> Optional[YandexSong]:
         try:

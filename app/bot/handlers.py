@@ -71,13 +71,15 @@ def _results_keyboard(tracks: list[dict], page: int) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
-def _main_keyboard() -> ReplyKeyboardMarkup | None:
-    if not settings.webapp_url:
-        return None
-    return ReplyKeyboardMarkup(
-        keyboard=[[KeyboardButton(text="🎧 Открыть плеер", web_app=WebAppInfo(url=settings.webapp_url))]],
-        resize_keyboard=True,
-    )
+BTN_CHART = "📈 Чарты"
+BTN_MIX = "🎧 Мой микс"
+
+
+def _main_keyboard() -> ReplyKeyboardMarkup:
+    rows = [[KeyboardButton(text=BTN_CHART), KeyboardButton(text=BTN_MIX)]]
+    if settings.webapp_url:
+        rows.append([KeyboardButton(text="▶️ Открыть плеер", web_app=WebAppInfo(url=settings.webapp_url))])
+    return ReplyKeyboardMarkup(keyboard=rows, resize_keyboard=True, input_field_placeholder="Название песни или исполнителя")
 
 
 async def _save_user(message: Message) -> None:
@@ -114,7 +116,8 @@ async def cmd_start(message: Message) -> None:
         f"👋 Привет, {message.from_user.first_name}!\n\n"
         "Я ищу музыку и присылаю MP3.\n"
         "Просто напишите название песни или исполнителя.\n\n"
-        "/recommend — рекомендации по вашей истории\n"
+        f"{BTN_CHART} — самые популярные песни\n"
+        f"{BTN_MIX} — подборка лично для вас\n"
         "/help — помощь"
     )
     await message.answer(text, reply_markup=_main_keyboard())
@@ -125,12 +128,34 @@ async def cmd_help(message: Message) -> None:
     await message.answer(
         "🔍 Отправьте текст — например, «Макс Корж» или «Жить в кайф».\n"
         "Нажмите на трек в списке — я пришлю его файлом.\n"
-        "/recommend — подборка на основе того, что вы слушали."
+        f"{BTN_CHART} — самые популярные песни.\n"
+        f"{BTN_MIX} или /recommend — подборка лично для вас."
     )
 
 
+@router.message(F.text == BTN_CHART)
+@router.message(Command("chart"))
+async def cmd_chart(message: Message) -> None:
+    await message.bot.send_chat_action(message.chat.id, ChatAction.TYPING)
+    chart = getattr(music_service, "chart_tracks", None)
+    tracks = await chart(SEARCH_LIMIT) if chart else []
+    if not tracks:
+        tracks = await music_service.search_tracks("Top 100", limit=SEARCH_LIMIT)
+    await _send_results(message, tracks, "📈 Чарт — самое популярное сейчас:")
+
+
+@router.message(F.text == BTN_MIX)
 @router.message(Command("recommend"))
 async def cmd_recommend(message: Message) -> None:
+    await message.bot.send_chat_action(message.chat.id, ChatAction.TYPING)
+    # 1. Персональная подборка источника («Моя волна» в Яндекс Музыке)
+    mix = getattr(music_service, "my_mix", None)
+    tracks = await mix(SEARCH_LIMIT) if mix else []
+    if tracks:
+        await _send_results(message, tracks, "🎧 Ваш микс:")
+        return
+
+    # 2. По истории прослушиваний в боте
     last = await db.music_db.history.find_one(
         {"user_id": message.from_user.id}, sort=[("listened_at", -1)]
     )
