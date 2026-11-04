@@ -9,7 +9,7 @@ class VKService:
         # Используем наш "волшебный" User-Agent и Токен.
         self.service = Service(settings.vk_user_agent, settings.vk_token)
 
-    async def search_tracks(self, query: str, limit: int = 20):
+    async def search_tracks(self, query: str, limit: int = 20, **_):
         """
         Прямой поиск через API для получения обложек.
         """
@@ -67,7 +67,7 @@ class VKService:
         print(f"✅ Found {len(tracks)} tracks for query: {query}")
         return tracks
 
-    async def get_audio_url(self, track_id: str):
+    async def get_audio_url(self, track_id: str, **_):
         """
         Получение ссылки на MP3 через vkpymusic (она умеет делать getById).
         """

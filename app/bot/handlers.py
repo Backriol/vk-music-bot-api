@@ -23,6 +23,7 @@ from aiogram.types import (
     WebAppInfo,
 )
 
+from app.bot.accounts import connect_button, user_tokens, yandex_enabled
 from app.bot.audio import AudioDownloadError, fetch_mp3
 from app.core.config import settings
 from app.core.database import db
@@ -130,7 +131,8 @@ async def cmd_start(message: Message) -> None:
         f"{BTN_WAVE} — песни подряд, как плейлист\n"
         f"{BTN_FRIENDS} — друзья и их последние 50 песен\n"
         f"{BTN_CLEAR} — убрать присланные песни\n"
-        "/help — помощь"
+        + ("/yandex — подключить свой Яндекс для личной волны\n" if yandex_enabled() else "")
+        + "/help — помощь"
     )
     await message.answer(text, reply_markup=_main_keyboard())
 
@@ -164,7 +166,9 @@ async def cmd_recommend(message: Message) -> None:
     await message.bot.send_chat_action(message.chat.id, ChatAction.TYPING)
     # 1. Персональная подборка источника («Моя волна» в Яндекс Музыке)
     mix = getattr(music_service, "my_mix", None)
-    tracks = (await mix(SEARCH_LIMIT))[0] if mix else []
+    wave_token, _ = await user_tokens(message.from_user.id)
+    # Персональная волна — только по своему подключённому Яндексу
+    tracks = (await mix(SEARCH_LIMIT, token=wave_token))[0] if mix and wave_token else []
     if tracks:
         await _send_results(message, tracks, "🎧 Ваш микс:")
         return
@@ -202,7 +206,7 @@ async def paginate(callback: CallbackQuery) -> None:
 
 # ---------- Подготовка и отправка треков ----------
 
-async def _prepare_audio(track_id: str):
+async def _prepare_audio(track_id: str, token: str | None = None):
     """
     Возвращает (media, meta, cached): media — file_id или загруженный файл.
     None, если трек недоступен. Бросает AudioDownloadError при сбое скачивания.
@@ -212,7 +216,7 @@ async def _prepare_audio(track_id: str):
         meta = {"title": cached["title"], "artist": cached["artist"], "duration": cached.get("duration", 0)}
         return cached["file_id"], meta, True
 
-    song = await music_service.get_audio_url(track_id)
+    song = await music_service.get_audio_url(track_id, token=token)
     if not song or not song.url:
         return None
     data = await fetch_mp3(song.url)
@@ -277,10 +281,11 @@ async def send_track(callback: CallbackQuery) -> None:
     chat_id = callback.message.chat.id
     bot = callback.bot
     await bot.send_chat_action(chat_id, ChatAction.UPLOAD_VOICE)
+    _, download_token = await user_tokens(callback.from_user.id)
 
     for attempt in range(2):
         try:
-            prepared = await _prepare_audio(track_id)
+            prepared = await _prepare_audio(track_id, download_token)
         except AudioDownloadError as e:
             logger.error("download failed for %s: %s", track_id, e)
             await bot.send_message(chat_id, f"⚠️ Не удалось скачать трек: {e}")
@@ -315,15 +320,44 @@ WAVE_MODES = {"default": "🎲 Обычная", "favorite": "❤️ Любимо
               "discover": "✨ Незнакомое", "popular": "🔥 Популярное"}
 
 
-def _wave_keyboard(mode: str = "default") -> InlineKeyboardMarkup:
+def _wave_keyboard(mode: str = "default", own_account: bool = True) -> InlineKeyboardMarkup:
     modes = [InlineKeyboardButton(text=("✅ " if m == mode else "") + label, callback_data=f"wave:mode:{m}")
              for m, label in WAVE_MODES.items()]
-    return InlineKeyboardMarkup(inline_keyboard=[
+    rows = [
         [InlineKeyboardButton(text=f"▶️ Ещё {WAVE_SIZE}", callback_data="wave:more"),
          InlineKeyboardButton(text="🔄 Новая волна", callback_data="wave:new")],
         modes[:2],
         modes[2:],
-    ])
+    ]
+    if not own_account:
+        rows.append([connect_button()])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+async def _wave_seeds(user_id: int) -> tuple[list[str], str]:
+    """
+    Сиды волны для тех, кто не подключил свой Яндекс: последние разные песни
+    из истории в боте (сначала выбранные самим человеком, потом из волны).
+    Если истории нет — популярное из чарта.
+    """
+    picked, seen = [], set()
+    for sources in ({"$ne": "wave"}, "wave"):
+        cursor = db.music_db.history.find({"user_id": user_id, "source": sources}).sort("listened_at", -1)
+        async for h in cursor:
+            tid = h["track_id"].split("_")[0]
+            if tid not in seen:
+                seen.add(tid)
+                picked.append(f"track:{tid}")
+            if len(picked) >= 3:
+                break
+        if len(picked) >= 3:
+            break
+    if picked:
+        return picked, "по вашей истории в боте"
+    chart = getattr(music_service, "chart_tracks", None)
+    top = await chart(3) if chart else []
+    return [f"track:{t['id'].split('_')[0]}" for t in top] or ["user:onyourwave"], \
+        "пока по популярному — послушайте пару песен, и она подстроится под вас"
 
 
 async def _send_album(bot, chat_id: int, prepared: list) -> list[Message]:
@@ -362,9 +396,17 @@ async def _send_wave(bot, chat_id: int, user_id: int, continue_wave: bool) -> No
         except Exception:
             pass
 
+    wave_token, download_token = await user_tokens(user_id)
+    if wave_token:
+        seeds, source_note = None, "ваша волна Яндекса"
+    else:
+        seeds, source_note = await _wave_seeds(user_id)
+        if continue_wave and state.get("seeds"):
+            seeds = state["seeds"]  # продолжаем ту же волну
     wave_state = {"session_id": state.get("session_id"), "played": state.get("played", []),
-                  "mode": state.get("mode", "default")}
-    tracks, wave_state = await mix(WAVE_SIZE, state=wave_state, new=not continue_wave)
+                  "mode": state.get("mode", "default"), "seeds": state.get("seeds")}
+    tracks, wave_state = await mix(WAVE_SIZE, state=wave_state, new=not continue_wave,
+                                   token=wave_token, seeds=seeds, incognito=not wave_token)
     if not tracks:
         await status.edit_text("😔 Не удалось получить волну. Попробуйте позже.")
         return
@@ -375,7 +417,7 @@ async def _send_wave(bot, chat_id: int, user_id: int, continue_wave: bool) -> No
     async def prep(t):
         async with sem:
             try:
-                return t, await _prepare_audio(t["id"])
+                return t, await _prepare_audio(t["id"], download_token)
             except Exception as e:
                 logger.warning("wave: skip %s: %s", t["id"], e)
                 return t, None
@@ -397,7 +439,7 @@ async def _send_wave(bot, chat_id: int, user_id: int, continue_wave: bool) -> No
             if p[2]:
                 await db.music_db.tg_audio.delete_one({"track_id": t["id"]})
                 try:
-                    p = await _prepare_audio(t["id"])
+                    p = await _prepare_audio(t["id"], download_token)
                 except Exception:
                     p = None
             if p:
@@ -422,10 +464,11 @@ async def _send_wave(bot, chat_id: int, user_id: int, continue_wave: bool) -> No
         pass
     control = await bot.send_message(
         chat_id,
-        f"🌊 Моя волна ({WAVE_MODES.get(wave_state['mode'], '')}): {len(msgs)} песен.\n"
+        f"🌊 Моя волна ({WAVE_MODES.get(wave_state['mode'], '')}): {len(msgs)} песен — {source_note}.\n"
         "Нажмите ▶️ на первой песне — остальные будут играть подряд.\n"
-        "Ниже можно выбрать, какой будет следующая волна.",
-        reply_markup=_wave_keyboard(wave_state["mode"]),
+        "Ниже можно выбрать, какой будет следующая волна."
+        + ("" if wave_token else "\n\n🔗 Подключите свой Яндекс — и это будет ваша настоящая «Моя волна»."),
+        reply_markup=_wave_keyboard(wave_state["mode"], own_account=bool(wave_token)),
     )
     await db.music_db.waves.update_one(
         {"chat_id": chat_id},

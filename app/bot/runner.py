@@ -12,6 +12,7 @@ from aiogram.types import BotCommand, MenuButtonWebApp, WebAppInfo
 import time
 from datetime import datetime
 
+from app.bot.accounts import router as accounts_router
 from app.bot.friends import router as friends_router
 from app.bot.handlers import router
 from app.core.database import db
@@ -48,6 +49,7 @@ def create_bot() -> tuple[Bot, Dispatcher]:
     )
     dp = Dispatcher()
     dp.update.outer_middleware(remember_user)
+    dp.include_router(accounts_router)
     dp.include_router(friends_router)  # раньше общего поиска, который ловит любой текст
     dp.include_router(router)
     return bot, dp
@@ -60,6 +62,7 @@ async def setup_bot(bot: Bot) -> None:
         BotCommand(command="wave", description="Моя волна — песни подряд"),
         BotCommand(command="recommend", description="Подборка списком"),
         BotCommand(command="friends", description="Друзья и их архивы"),
+        BotCommand(command="yandex", description="Подключить свой Яндекс"),
         BotCommand(command="clear", description="Удалить присланные песни"),
         BotCommand(command="help", description="Помощь"),
     ])

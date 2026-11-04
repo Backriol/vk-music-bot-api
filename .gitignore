@@ -37,3 +37,8 @@ users.db
 # Temporary files
 *.tmp
 *.bak
+
+# Данные бота без MongoDB
+bot_data.json
+bot_data.tmp
+bot_data.broken

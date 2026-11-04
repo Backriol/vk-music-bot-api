@@ -24,6 +24,8 @@ class Settings(BaseSettings):
     # MongoDB. Пусто — временная база в памяти (история сбрасывается при перезапуске)
     mongo_url: str = ""
     db_name: str = "music_bot_db"
+    # Файл для данных, если MongoDB не подключена
+    data_file: str = "bot_data.json"
     
     # Application
     app_host: str = "0.0.0.0"
