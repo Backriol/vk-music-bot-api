@@ -164,7 +164,7 @@ async def cmd_recommend(message: Message) -> None:
     await message.bot.send_chat_action(message.chat.id, ChatAction.TYPING)
     # 1. Персональная подборка источника («Моя волна» в Яндекс Музыке)
     mix = getattr(music_service, "my_mix", None)
-    tracks = await mix(SEARCH_LIMIT) if mix else []
+    tracks = (await mix(SEARCH_LIMIT))[0] if mix else []
     if tracks:
         await _send_results(message, tracks, "🎧 Ваш микс:")
         return
@@ -311,11 +311,19 @@ async def send_track(callback: CallbackQuery) -> None:
 
 # ---------- Моя волна: песни альбомом, играют подряд ----------
 
-def _wave_keyboard() -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(inline_keyboard=[[
-        InlineKeyboardButton(text=f"▶️ Ещё {WAVE_SIZE}", callback_data="wave:more"),
-        InlineKeyboardButton(text="🔄 Новая волна", callback_data="wave:new"),
-    ]])
+WAVE_MODES = {"default": "🎲 Обычная", "favorite": "❤️ Любимое",
+              "discover": "✨ Незнакомое", "popular": "🔥 Популярное"}
+
+
+def _wave_keyboard(mode: str = "default") -> InlineKeyboardMarkup:
+    modes = [InlineKeyboardButton(text=("✅ " if m == mode else "") + label, callback_data=f"wave:mode:{m}")
+             for m, label in WAVE_MODES.items()]
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text=f"▶️ Ещё {WAVE_SIZE}", callback_data="wave:more"),
+         InlineKeyboardButton(text="🔄 Новая волна", callback_data="wave:new")],
+        modes[:2],
+        modes[2:],
+    ])
 
 
 async def _send_album(bot, chat_id: int, prepared: list) -> list[Message]:
@@ -354,7 +362,9 @@ async def _send_wave(bot, chat_id: int, user_id: int, continue_wave: bool) -> No
         except Exception:
             pass
 
-    tracks = await mix(WAVE_SIZE, after=state.get("last_track") if continue_wave else None)
+    wave_state = {"session_id": state.get("session_id"), "played": state.get("played", []),
+                  "mode": state.get("mode", "default")}
+    tracks, wave_state = await mix(WAVE_SIZE, state=wave_state, new=not continue_wave)
     if not tracks:
         await status.edit_text("😔 Не удалось получить волну. Попробуйте позже.")
         return
@@ -412,14 +422,15 @@ async def _send_wave(bot, chat_id: int, user_id: int, continue_wave: bool) -> No
         pass
     control = await bot.send_message(
         chat_id,
-        f"🌊 Моя волна: {len(msgs)} песен.\n"
-        "Нажмите ▶️ на первой песне — остальные будут играть подряд.",
-        reply_markup=_wave_keyboard(),
+        f"🌊 Моя волна ({WAVE_MODES.get(wave_state['mode'], '')}): {len(msgs)} песен.\n"
+        "Нажмите ▶️ на первой песне — остальные будут играть подряд.\n"
+        "Ниже можно выбрать, какой будет следующая волна.",
+        reply_markup=_wave_keyboard(wave_state["mode"]),
     )
     await db.music_db.waves.update_one(
         {"chat_id": chat_id},
         {"$set": {"chat_id": chat_id, "user_id": user_id,
-                  "last_track": prepared[-1][0]["id"], "control_id": control.message_id}},
+                  "control_id": control.message_id, **wave_state}},
         upsert=True,
     )
 
@@ -437,6 +448,16 @@ async def wave_buttons(callback: CallbackQuery) -> None:
                      continue_wave=callback.data == "wave:more")
 
 
+@router.callback_query(F.data.regexp(r"^wave:mode:(default|favorite|discover|popular)$"))
+async def wave_mode(callback: CallbackQuery) -> None:
+    mode = callback.data.rsplit(":", 1)[1]
+    await db.music_db.waves.update_one(
+        {"chat_id": callback.message.chat.id}, {"$set": {"chat_id": callback.message.chat.id, "mode": mode}}, upsert=True
+    )
+    await callback.answer(f"Волна: {WAVE_MODES[mode]}. Собираю…")
+    await _send_wave(callback.bot, callback.message.chat.id, callback.from_user.id, continue_wave=False)
+
+
 @router.message(F.text == BTN_CLEAR)
 @router.message(Command("clear"))
 async def cmd_clear(message: Message) -> None:
@@ -447,7 +468,8 @@ async def cmd_clear(message: Message) -> None:
             await message.bot.delete_message(message.chat.id, state["control_id"])
         except Exception:
             pass
-        await db.music_db.waves.delete_one({"chat_id": message.chat.id})
+        # Режим волны и список уже присланных песен сохраняем — повторов не будет
+        await db.music_db.waves.update_one({"chat_id": message.chat.id}, {"$unset": {"control_id": ""}})
     try:
         await message.delete()
     except Exception:

@@ -66,6 +66,15 @@ def _to_dicts(items, limit: int) -> list[dict]:
     return tracks
 
 
+# Характер волны (настройка «diversity» в Яндекс Музыке)
+WAVE_MODES = {
+    "default": "🎲 Обычная",
+    "favorite": "❤️ Любимое",
+    "discover": "✨ Незнакомое",
+    "popular": "🔥 Популярное",
+}
+
+
 class YandexService:
     def __init__(self) -> None:
         self._client: Optional[ClientAsync] = None
@@ -104,24 +113,94 @@ class YandexService:
             return []
         return _to_dicts(items, limit)
 
-    async def my_mix(self, limit: int = 30, after: Optional[str] = None) -> list[dict]:
-        """Персональная «Моя волна». after — наш ID последнего трека, чтобы продолжить волну."""
+    async def my_mix(self, limit: int = 30, state: Optional[dict] = None,
+                     new: bool = True) -> tuple[list[dict], dict]:
+        """
+        «Моя волна» через сессии ротора — так же, как в приложении Яндекс Музыки.
+
+        state хранит id сессии, уже присланные треки (played) и режим (mode).
+        Список played передаётся Яндексу, чтобы он не повторял песни.
+        Возвращает (треки, новый state).
+        """
+        state = dict(state or {})
+        played: list[str] = list(state.get("played", []))
+        mode = state.get("mode", "default")
+        seeds = ["user:onyourwave"]
+        if mode in WAVE_MODES and mode != "default":
+            seeds.append(f"settingDiversity:{mode}")
+
+        items, ids = [], set(played)
+
+        def take(sequence) -> int:
+            added = 0
+            for seq in sequence or []:
+                t = seq.track
+                if t is None or t.available is False:
+                    continue
+                key = _to_ym_id(_to_our_id(t))
+                if key in ids:
+                    continue
+                ids.add(key)
+                items.append(t)
+                added += 1
+            return added
+
         try:
             client = await self.client()
-            items, queue = [], (_to_ym_id(after).split(":")[0] if after else None)
-            for _ in range(4):  # станция отдаёт по несколько треков за запрос
-                res = await client.rotor_station_tracks("user:onyourwave", queue=queue)
-                batch = [s.track for s in (res.sequence if res else []) if s.track]
-                if not batch:
-                    break
-                items.extend(batch)
-                queue = batch[-1].id
+            session_id = None if new else state.get("session_id")
+            if session_id is None:
+                session_id, first = await self._new_session(client, seeds, played)
+                if session_id is None:
+                    raise RuntimeError("сессия волны не создана")
+                take(first)
+            for _ in range(8):  # Яндекс отдаёт по несколько песен за запрос
                 if len(items) >= limit:
                     break
+                res = await client.rotor_session_tracks(session_id, queue=(played + [
+                    _to_ym_id(_to_our_id(t)) for t in items])[-300:])
+                if res is None or res.unknown_session or res.terminated:
+                    session_id, first = await self._new_session(client, seeds, played + [
+                        _to_ym_id(_to_our_id(t)) for t in items])
+                    if session_id is None:
+                        break
+                    take(first)
+                    continue
+                if not take(res.sequence):
+                    break
         except Exception as e:
-            print(f"Yandex Music wave error: {e}")
-            return []
-        return _to_dicts(items, limit)
+            print(f"Yandex Music wave session error: {e} — пробую старый способ")
+            try:
+                client = await self.client()
+                queue = played[-1].split(":")[0] if played else None
+                for _ in range(6):
+                    res = await client.rotor_station_tracks(seeds[0], queue=queue)
+                    if not take(res.sequence if res else []):
+                        break
+                    queue = items[-1].id
+                    if len(items) >= limit:
+                        break
+            except Exception as e2:
+                print(f"Yandex Music wave error: {e2}")
+            session_id = None
+
+        tracks = _to_dicts(items, limit)
+        played = (played + [_to_ym_id(t["id"]) for t in tracks])[-500:]
+        return tracks, {"session_id": session_id, "played": played, "mode": mode}
+
+    async def _new_session(self, client, seeds: list[str], played: list[str]):
+        """Возвращает (id сессии, первая порция треков) или (None, [])."""
+        session = await client.rotor_session_new(
+            seeds=seeds, queue=played[-300:], include_tracks_in_response=True, allow_explicit=True,
+        )
+        if session is None or not session.radio_session_id:
+            return None, []
+        try:
+            await client.rotor_session_feedback_radio_started(
+                session.radio_session_id, batch_id=session.batch_id, from_="telegram-bot",
+            )
+        except Exception:
+            pass
+        return session.radio_session_id, session.sequence or []
 
     async def get_audio_url(self, track_id: str) -> Optional[YandexSong]:
         try:
