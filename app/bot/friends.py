@@ -20,7 +20,7 @@ router = Router(name="friends")
 
 ARCHIVE_SIZE = 50
 MAX_FRIENDS = 100
-USERNAME_RE = re.compile(r"^@([A-Za-z0-9_]{4,32})$")
+USERNAME_RE = re.compile(r"^@([A-Za-z0-9_]{1,32})$")
 
 
 # ---------- Хранилище ----------
@@ -58,6 +58,17 @@ async def display_name(user_id: int) -> str:
     return f"{name} (@{u['username']})" if u.get("username") else name
 
 
+async def invites_blocked(user_id: int) -> bool:
+    u = await db.music_db.users.find_one({"id": user_id})
+    return bool(u and u.get("invites_blocked"))
+
+
+async def set_invites_blocked(user_id: int, blocked: bool) -> None:
+    await db.music_db.users.update_one({"id": user_id}, {"$set": {"invites_blocked": blocked}}, upsert=True)
+    if blocked:  # ожидающие заявки больше не нужны
+        await db.music_db.friend_requests.delete_many({"to": user_id})
+
+
 async def archive(user_id: int, limit: int = ARCHIVE_SIZE) -> list[dict]:
     """Последние разные песни пользователя, новые сверху."""
     cursor = db.music_db.history.find({"user_id": user_id}).sort("listened_at", -1)
@@ -88,10 +99,17 @@ async def _friends_menu(user_id: int) -> tuple[str, InlineKeyboardMarkup]:
             InlineKeyboardButton(text="❌", callback_data=f"fx:{fid}"),
         ])
     rows.append([InlineKeyboardButton(text="➕ Добавить друга", callback_data="fr:add")])
+    blocked = await invites_blocked(user_id)
+    rows.append([InlineKeyboardButton(
+        text="🔔 Разрешить приглашения" if blocked else "🔕 Запретить приглашения",
+        callback_data="fr:allow" if blocked else "fr:block",
+    )])
     if ids:
         text = f"👥 Ваши друзья ({len(ids)}). Нажмите на друга, чтобы открыть его архив — последние {ARCHIVE_SIZE} песен."
     else:
         text = "👥 У вас пока нет друзей в боте.\nНажмите «➕ Добавить друга»."
+    if blocked:
+        text += "\n\n🔕 Приглашения в друзья запрещены — заявки от других вам не приходят."
     return text, InlineKeyboardMarkup(inline_keyboard=rows)
 
 
@@ -117,6 +135,19 @@ async def friends_menu_cb(callback: CallbackQuery) -> None:
     text, kb = await _friends_menu(callback.from_user.id)
     await callback.message.edit_text(text, reply_markup=kb)
     await callback.answer()
+
+
+@router.callback_query(F.data.in_({"fr:block", "fr:allow"}))
+async def toggle_invites(callback: CallbackQuery) -> None:
+    blocked = callback.data == "fr:block"
+    await set_invites_blocked(callback.from_user.id, blocked)
+    await callback.answer(
+        "🔕 Приглашения запрещены. Заявки больше не будут приходить." if blocked
+        else "🔔 Приглашения снова разрешены.",
+        show_alert=True,
+    )
+    text, kb = await _friends_menu(callback.from_user.id)
+    await callback.message.edit_text(text, reply_markup=kb)
 
 
 @router.callback_query(F.data == "fr:add")
@@ -149,6 +180,12 @@ async def _offer_friendship(message: Message, from_id: int) -> None:
     if not await db.music_db.users.find_one({"id": from_id}):
         await message.answer("Ссылка-приглашение недействительна.")
         return
+    # Человек сам открыл ссылку — показываем заявку даже при запрете приглашений
+    await db.music_db.friend_requests.update_one(
+        {"from": from_id, "to": me_id},
+        {"$set": {"from": from_id, "to": me_id, "created": datetime.utcnow()}},
+        upsert=True,
+    )
     await message.answer(
         f"👋 {await display_name(from_id)} хочет добавить вас в друзья.\n"
         f"Вы будете видеть последние {ARCHIVE_SIZE} песен друг друга.",
@@ -183,6 +220,9 @@ async def add_by_username(message: Message) -> None:
     if await are_friends(me_id, target["id"]):
         await message.answer(f"Вы уже друзья с @{username} 👥")
         return
+    if target.get("invites_blocked"):
+        await message.answer(f"🔕 @{username} сейчас не принимает приглашения в друзья.")
+        return
 
     await db.music_db.friend_requests.update_one(
         {"from": me_id, "to": target["id"]},
@@ -212,6 +252,10 @@ async def answer_request(callback: CallbackQuery) -> None:
         await callback.answer()
         return
 
+    if not await db.music_db.friend_requests.find_one({"from": from_id, "to": me_id}):
+        await callback.message.edit_text("Эта заявка уже недействительна.")
+        await callback.answer()
+        return
     if len(await friend_ids(me_id)) >= MAX_FRIENDS:
         await callback.answer(f"У вас уже {MAX_FRIENDS} друзей — это максимум.", show_alert=True)
         return
