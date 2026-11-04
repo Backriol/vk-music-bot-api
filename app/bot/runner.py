@@ -33,7 +33,9 @@ async def setup_bot(bot: Bot) -> None:
     await bot.set_my_commands([
         BotCommand(command="start", description="Начать"),
         BotCommand(command="chart", description="Чарты"),
-        BotCommand(command="recommend", description="Мой микс"),
+        BotCommand(command="wave", description="Моя волна — песни подряд"),
+        BotCommand(command="recommend", description="Подборка списком"),
+        BotCommand(command="clear", description="Удалить присланные песни"),
         BotCommand(command="help", description="Помощь"),
     ])
     if settings.webapp_url:

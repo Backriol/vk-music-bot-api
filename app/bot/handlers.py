@@ -2,6 +2,7 @@
 Хендлеры Telegram-бота: поиск, отправка MP3, рекомендации.
 Используют те же сервисы и коллекции MongoDB, что и API.
 """
+import asyncio
 import logging
 import re
 from collections import OrderedDict
@@ -15,6 +16,7 @@ from aiogram.types import (
     CallbackQuery,
     InlineKeyboardButton,
     InlineKeyboardMarkup,
+    InputMediaAudio,
     KeyboardButton,
     Message,
     ReplyKeyboardMarkup,
@@ -72,11 +74,17 @@ def _results_keyboard(tracks: list[dict], page: int) -> InlineKeyboardMarkup:
 
 
 BTN_CHART = "📈 Чарты"
-BTN_MIX = "🎧 Мой микс"
+BTN_WAVE = "🌊 Моя волна"
+BTN_MIX_OLD = "🎧 Мой микс"  # кнопка из старой клавиатуры — тоже запускает волну
+BTN_CLEAR = "🧹 Очистить чат"
+WAVE_SIZE = 10  # максимум треков в одном альбоме Telegram
 
 
 def _main_keyboard() -> ReplyKeyboardMarkup:
-    rows = [[KeyboardButton(text=BTN_CHART), KeyboardButton(text=BTN_MIX)]]
+    rows = [
+        [KeyboardButton(text=BTN_CHART), KeyboardButton(text=BTN_WAVE)],
+        [KeyboardButton(text=BTN_CLEAR)],
+    ]
     if settings.webapp_url:
         rows.append([KeyboardButton(text="▶️ Открыть плеер", web_app=WebAppInfo(url=settings.webapp_url))])
     return ReplyKeyboardMarkup(keyboard=rows, resize_keyboard=True, input_field_placeholder="Название песни или исполнителя")
@@ -117,7 +125,8 @@ async def cmd_start(message: Message) -> None:
         "Я ищу музыку и присылаю MP3.\n"
         "Просто напишите название песни или исполнителя.\n\n"
         f"{BTN_CHART} — самые популярные песни\n"
-        f"{BTN_MIX} — подборка лично для вас\n"
+        f"{BTN_WAVE} — песни подряд, как плейлист\n"
+        f"{BTN_CLEAR} — убрать присланные песни\n"
         "/help — помощь"
     )
     await message.answer(text, reply_markup=_main_keyboard())
@@ -129,7 +138,10 @@ async def cmd_help(message: Message) -> None:
         "🔍 Отправьте текст — например, «Макс Корж» или «Жить в кайф».\n"
         "Нажмите на трек в списке — я пришлю его файлом.\n"
         f"{BTN_CHART} — самые популярные песни.\n"
-        f"{BTN_MIX} или /recommend — подборка лично для вас."
+        f"{BTN_WAVE} — 10 песен альбомом: нажмите на первую, и они будут играть подряд.\n"
+        "Перед новой волной старая удаляется, чтобы плеер не играл прошлые песни.\n"
+        f"{BTN_CLEAR} — удалить из чата все песни от бота (Telegram позволяет только за последние 48 часов).\n"
+        "/recommend — подборка списком."
     )
 
 
@@ -144,7 +156,6 @@ async def cmd_chart(message: Message) -> None:
     await _send_results(message, tracks, "📈 Чарт — самое популярное сейчас:")
 
 
-@router.message(F.text == BTN_MIX)
 @router.message(Command("recommend"))
 async def cmd_recommend(message: Message) -> None:
     await message.bot.send_chat_action(message.chat.id, ChatAction.TYPING)
@@ -169,18 +180,6 @@ async def cmd_recommend(message: Message) -> None:
     await _send_results(message, tracks, header)
 
 
-# ---------- Поиск ----------
-
-@router.message(F.text & ~F.text.startswith("/"))
-async def search(message: Message) -> None:
-    query = message.text.strip()
-    if not query:
-        return
-    await message.bot.send_chat_action(message.chat.id, ChatAction.TYPING)
-    tracks = await music_service.search_tracks(query, limit=SEARCH_LIMIT)
-    await _send_results(message, tracks, f"🔍 Результаты по запросу «{query[:100]}»:")
-
-
 @router.callback_query(F.data == "noop")
 async def noop(callback: CallbackQuery) -> None:
     await callback.answer()
@@ -198,7 +197,69 @@ async def paginate(callback: CallbackQuery) -> None:
     await callback.answer()
 
 
-# ---------- Отправка трека ----------
+# ---------- Подготовка и отправка треков ----------
+
+async def _prepare_audio(track_id: str):
+    """
+    Возвращает (media, meta, cached): media — file_id или загруженный файл.
+    None, если трек недоступен. Бросает AudioDownloadError при сбое скачивания.
+    """
+    cached = await db.music_db.tg_audio.find_one({"track_id": track_id})
+    if cached:
+        return cached["file_id"], {"title": cached["title"], "artist": cached["artist"], "duration": 0}, True
+
+    song = await music_service.get_audio_url(track_id)
+    if not song or not song.url:
+        return None
+    data = await fetch_mp3(song.url)
+    filename = f"{song.artist} - {song.title}"[:120] + ".mp3"
+    meta = {"title": song.title, "artist": song.artist, "duration": int(song.duration or 0)}
+    return BufferedInputFile(data, filename=filename), meta, False
+
+
+async def _cache_file_id(track_id: str, msg: Message, meta: dict) -> None:
+    if not msg.audio:
+        return
+    await db.music_db.tg_audio.update_one(
+        {"track_id": track_id},
+        {"$set": {"track_id": track_id, "file_id": msg.audio.file_id,
+                  "title": meta["title"], "artist": meta["artist"], "saved_at": datetime.utcnow()}},
+        upsert=True,
+    )
+
+
+async def _remember_sent(chat_id: int, message_ids: list[int], kind: str) -> None:
+    """Запоминаем отправленные песни, чтобы потом их можно было удалить."""
+    if message_ids:
+        await db.music_db.sent_audio.insert_many([
+            {"chat_id": chat_id, "message_id": m, "kind": kind, "sent_at": datetime.utcnow()}
+            for m in message_ids
+        ])
+
+
+async def _delete_sent(bot, chat_id: int, kind: str | None = None) -> int:
+    query = {"chat_id": chat_id}
+    if kind:
+        query["kind"] = kind
+    docs = await db.music_db.sent_audio.find(query).to_list(length=None)
+    ids = [d["message_id"] for d in docs]
+    deleted = 0
+    for i in range(0, len(ids), 100):  # Telegram удаляет до 100 сообщений за раз
+        chunk = ids[i:i + 100]
+        try:
+            await bot.delete_messages(chat_id, chunk)
+            deleted += len(chunk)
+        except Exception:
+            # Сообщения старше 48 часов бот удалить не может — пробуем по одному
+            for m in chunk:
+                try:
+                    await bot.delete_message(chat_id, m)
+                    deleted += 1
+                except Exception:
+                    pass
+    await db.music_db.sent_audio.delete_many(query)
+    return deleted
+
 
 @router.callback_query(F.data.startswith("t:"))
 async def send_track(callback: CallbackQuery) -> None:
@@ -212,52 +273,197 @@ async def send_track(callback: CallbackQuery) -> None:
     bot = callback.bot
     await bot.send_chat_action(chat_id, ChatAction.UPLOAD_VOICE)
 
-    # 1. Telegram уже хранит этот файл — отправляем по file_id мгновенно
-    cached = await db.music_db.tg_audio.find_one({"track_id": track_id})
-    if cached:
+    for attempt in range(2):
         try:
-            await bot.send_audio(chat_id, cached["file_id"])
-            await _add_history(callback.from_user.id, track_id, cached["title"], cached["artist"])
+            prepared = await _prepare_audio(track_id)
+        except AudioDownloadError as e:
+            logger.error("download failed for %s: %s", track_id, e)
+            await bot.send_message(chat_id, f"⚠️ Не удалось скачать трек: {e}")
             return
-        except Exception as e:  # file_id мог стать невалидным
-            logger.warning("cached file_id failed for %s: %s", track_id, e)
-            await db.music_db.tg_audio.delete_one({"track_id": track_id})
+        if not prepared:
+            await bot.send_message(chat_id, "🚫 Трек недоступен (удалён или ограничен правообладателем).")
+            return
+        media, meta, cached = prepared
+        try:
+            if cached:
+                msg = await bot.send_audio(chat_id, media)
+            else:
+                msg = await bot.send_audio(chat_id, media, title=meta["title"],
+                                           performer=meta["artist"], duration=meta["duration"])
+            break
+        except Exception as e:
+            if cached and attempt == 0:  # file_id мог стать невалидным — скачаем заново
+                logger.warning("cached file_id failed for %s: %s", track_id, e)
+                await db.music_db.tg_audio.delete_one({"track_id": track_id})
+                continue
+            raise
 
-    # 2. Получаем ссылку из VK и скачиваем
-    song = await music_service.get_audio_url(track_id)
-    if not song or not song.url:
-        await bot.send_message(chat_id, "🚫 Трек недоступен (удалён или ограничен правообладателем).")
+    if not cached:
+        await _cache_file_id(track_id, msg, meta)
+    await _remember_sent(chat_id, [msg.message_id], "track")
+    await _add_history(callback.from_user.id, track_id, meta["title"], meta["artist"])
+
+
+# ---------- Моя волна: песни альбомом, играют подряд ----------
+
+def _wave_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[[
+        InlineKeyboardButton(text=f"▶️ Ещё {WAVE_SIZE}", callback_data="wave:more"),
+        InlineKeyboardButton(text="🔄 Новая волна", callback_data="wave:new"),
+    ]])
+
+
+async def _send_album(bot, chat_id: int, prepared: list) -> list[Message]:
+    await bot.send_chat_action(chat_id, ChatAction.UPLOAD_VOICE)
+
+    def extra(meta, cached):
+        return {} if cached else {"title": meta["title"], "performer": meta["artist"], "duration": meta["duration"]}
+
+    if len(prepared) == 1:
+        _, (file, meta, cached) = prepared[0]
+        return [await bot.send_audio(chat_id, file, **extra(meta, cached))]
+    media = [InputMediaAudio(media=file, **extra(meta, cached)) for _, (file, meta, cached) in prepared]
+    return await bot.send_media_group(chat_id, media=media)
+
+
+async def _send_wave(bot, chat_id: int, user_id: int, continue_wave: bool) -> None:
+    mix = getattr(music_service, "my_mix", None)
+    if mix is None:
+        await bot.send_message(chat_id, "Моя волна доступна только с Яндекс Музыкой. Попробуйте /recommend.")
+        return
+
+    state = await db.music_db.waves.find_one({"chat_id": chat_id}) or {}
+    status = await bot.send_message(chat_id, "🌊 Собираю волну… это займёт до минуты.")
+
+    if not continue_wave:
+        # Удаляем прошлую волну, чтобы плеер Telegram не уходил в старые песни
+        await _delete_sent(bot, chat_id, kind="wave")
+        if state.get("control_id"):
+            try:
+                await bot.delete_message(chat_id, state["control_id"])
+            except Exception:
+                pass
+    elif state.get("control_id"):
+        try:
+            await bot.edit_message_reply_markup(chat_id=chat_id, message_id=state["control_id"], reply_markup=None)
+        except Exception:
+            pass
+
+    tracks = await mix(WAVE_SIZE, after=state.get("last_track") if continue_wave else None)
+    if not tracks:
+        await status.edit_text("😔 Не удалось получить волну. Попробуйте позже.")
+        return
+
+    # Скачиваем параллельно, но не больше 3 треков одновременно
+    sem = asyncio.Semaphore(3)
+
+    async def prep(t):
+        async with sem:
+            try:
+                return t, await _prepare_audio(t["id"])
+            except Exception as e:
+                logger.warning("wave: skip %s: %s", t["id"], e)
+                return t, None
+
+    prepared = [(t, p) for t, p in await asyncio.gather(*(prep(t) for t in tracks)) if p]
+    if not prepared:
+        await status.edit_text("😔 Не удалось скачать песни волны. Попробуйте позже.")
         return
 
     try:
-        data = await fetch_mp3(song.url)
-    except AudioDownloadError as e:
-        logger.error("download failed for %s: %s", track_id, e)
-        await bot.send_message(chat_id, f"⚠️ Не удалось скачать трек: {e}")
-        return
+        msgs = await _send_album(bot, chat_id, prepared)
+    except Exception as e:
+        if not any(p[2] for _, p in prepared):
+            raise
+        # Какой-то сохранённый file_id стал невалидным — скачиваем такие песни заново
+        logger.warning("wave: cached file_id failed, re-uploading: %s", e)
+        fresh = []
+        for t, p in prepared:
+            if p[2]:
+                await db.music_db.tg_audio.delete_one({"track_id": t["id"]})
+                try:
+                    p = await _prepare_audio(t["id"])
+                except Exception:
+                    p = None
+            if p:
+                fresh.append((t, p))
+        prepared = fresh
+        if not prepared:
+            await status.edit_text("😔 Не удалось отправить волну. Попробуйте позже.")
+            return
+        msgs = await _send_album(bot, chat_id, prepared)
 
-    filename = f"{song.artist} - {song.title}"[:120] + ".mp3"
-    msg = await bot.send_audio(
+    for (t, (_, meta, cached)), msg in zip(prepared, msgs):
+        if not cached:
+            await _cache_file_id(t["id"], msg, meta)
+    await _remember_sent(chat_id, [m.message_id for m in msgs], "wave")
+
+    try:
+        await bot.delete_message(chat_id, status.message_id)
+    except Exception:
+        pass
+    control = await bot.send_message(
         chat_id,
-        BufferedInputFile(data, filename=filename),
-        title=song.title,
-        performer=song.artist,
-        duration=int(song.duration or 0),
+        f"🌊 Моя волна: {len(msgs)} песен.\n"
+        "Нажмите ▶️ на первой песне — остальные будут играть подряд.",
+        reply_markup=_wave_keyboard(),
+    )
+    await db.music_db.waves.update_one(
+        {"chat_id": chat_id},
+        {"$set": {"chat_id": chat_id, "user_id": user_id,
+                  "last_track": prepared[-1][0]["id"], "control_id": control.message_id}},
+        upsert=True,
     )
 
-    if msg.audio:
-        await db.music_db.tg_audio.update_one(
-            {"track_id": track_id},
-            {"$set": {
-                "track_id": track_id,
-                "file_id": msg.audio.file_id,
-                "title": song.title,
-                "artist": song.artist,
-                "saved_at": datetime.utcnow(),
-            }},
-            upsert=True,
-        )
-    await _add_history(callback.from_user.id, track_id, song.title, song.artist)
+
+@router.message(F.text.in_({BTN_WAVE, BTN_MIX_OLD}))
+@router.message(Command("wave"))
+async def cmd_wave(message: Message) -> None:
+    await _send_wave(message.bot, message.chat.id, message.from_user.id, continue_wave=False)
+
+
+@router.callback_query(F.data.in_({"wave:more", "wave:new"}))
+async def wave_buttons(callback: CallbackQuery) -> None:
+    await callback.answer("⏳ Собираю…")
+    await _send_wave(callback.bot, callback.message.chat.id, callback.from_user.id,
+                     continue_wave=callback.data == "wave:more")
+
+
+@router.message(F.text == BTN_CLEAR)
+@router.message(Command("clear"))
+async def cmd_clear(message: Message) -> None:
+    deleted = await _delete_sent(message.bot, message.chat.id)
+    state = await db.music_db.waves.find_one({"chat_id": message.chat.id})
+    if state and state.get("control_id"):
+        try:
+            await message.bot.delete_message(message.chat.id, state["control_id"])
+        except Exception:
+            pass
+        await db.music_db.waves.delete_one({"chat_id": message.chat.id})
+    try:
+        await message.delete()
+    except Exception:
+        pass
+    note = await message.answer(f"🧹 Удалено песен: {deleted}." + (
+        "" if deleted else "\nTelegram не даёт боту удалять сообщения старше 48 часов — "
+                           "их можно удалить вручную или очистить историю чата."))
+    await asyncio.sleep(5)
+    try:
+        await note.delete()
+    except Exception:
+        pass
+
+
+# ---------- Поиск ----------
+
+@router.message(F.text & ~F.text.startswith("/"))
+async def search(message: Message) -> None:
+    query = message.text.strip()
+    if not query:
+        return
+    await message.bot.send_chat_action(message.chat.id, ChatAction.TYPING)
+    tracks = await music_service.search_tracks(query, limit=SEARCH_LIMIT)
+    await _send_results(message, tracks, f"🔍 Результаты по запросу «{query[:100]}»:")
 
 
 async def _add_history(user_id: int, track_id: str, title: str, artist: str) -> None:

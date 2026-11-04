@@ -104,11 +104,11 @@ class YandexService:
             return []
         return _to_dicts(items, limit)
 
-    async def my_mix(self, limit: int = 30) -> list[dict]:
-        """Персональная «Моя волна» пользователя."""
+    async def my_mix(self, limit: int = 30, after: Optional[str] = None) -> list[dict]:
+        """Персональная «Моя волна». after — наш ID последнего трека, чтобы продолжить волну."""
         try:
             client = await self.client()
-            items, queue = [], None
+            items, queue = [], (_to_ym_id(after).split(":")[0] if after else None)
             for _ in range(4):  # станция отдаёт по несколько треков за запрос
                 res = await client.rotor_station_tracks("user:onyourwave", queue=queue)
                 batch = [s.track for s in (res.sequence if res else []) if s.track]
