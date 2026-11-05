@@ -95,13 +95,17 @@ BTN_WAVE = "🌊 Моя волна"
 BTN_MIX_OLD = "🎧 Мой микс"  # кнопка из старой клавиатуры — тоже запускает волну
 BTN_CLEAR = "🧹 Очистить чат"
 BTN_FRIENDS = "👥 Друзья"
+BTN_MOOD = "🎭 Настроение"
+MOODS = {"active": "🔥 Бодрое", "fun": "😊 Весёлое", "calm": "😌 Спокойное",
+         "sad": "😢 Грустное", "sport": "🏃 Для спорта", "sleep": "😴 Для сна"}
 WAVE_SIZE = 10  # максимум треков в одном альбоме Telegram
 
 
 def _main_keyboard() -> ReplyKeyboardMarkup:
     rows = [
         [KeyboardButton(text=BTN_CHART), KeyboardButton(text=BTN_WAVE)],
-        [KeyboardButton(text=BTN_FRIENDS), KeyboardButton(text=BTN_CLEAR)],
+        [KeyboardButton(text=BTN_MOOD), KeyboardButton(text=BTN_FRIENDS)],
+        [KeyboardButton(text=BTN_CLEAR)],
     ]
     if settings.webapp_url:
         rows.append([KeyboardButton(text="▶️ Открыть плеер", web_app=WebAppInfo(url=settings.webapp_url))])
@@ -160,6 +164,7 @@ async def cmd_help(message: Message) -> None:
         f"{BTN_CHART} — самые популярные песни.\n"
         f"{BTN_WAVE} — 10 песен альбомом: нажмите на первую, и они будут играть подряд.\n"
         "Перед новой волной старая удаляется, чтобы плеер не играл прошлые песни.\n"
+        f"{BTN_MOOD} — волна под настроение: бодрое, спокойное, для спорта, для сна…\n"
         f"{BTN_FRIENDS} — друзья и их последние 50 песен.\n"
         f"{BTN_CLEAR} — удалить из чата все песни от бота (Telegram позволяет только за последние 48 часов).\n"
         + ("/yandex — подключить свой Яндекс, чтобы волна знала ваш вкус (по желанию).\n" if yandex_enabled() else "")
@@ -310,7 +315,17 @@ WAVE_MODES = {"default": "🎲 Обычная", "favorite": "❤️ Любимо
               "discover": "✨ Незнакомое", "popular": "🔥 Популярное"}
 
 
-def _wave_keyboard(mode: str = "default", own_account: bool = True) -> InlineKeyboardMarkup:
+def _mood_keyboard(current: str | None) -> InlineKeyboardMarkup:
+    btns = [InlineKeyboardButton(text=("✅ " if m == current else "") + label, callback_data=f"mood:{m}")
+            for m, label in MOODS.items()]
+    rows = [btns[i:i + 2] for i in range(0, len(btns), 2)]
+    rows.append([InlineKeyboardButton(text=("✅ " if not current else "") + "✖️ Без настроения",
+                                      callback_data="mood:none")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def _wave_keyboard(mode: str = "default", own_account: bool = True,
+                   mood: str | None = None) -> InlineKeyboardMarkup:
     modes = [InlineKeyboardButton(text=("✅ " if m == mode else "") + label, callback_data=f"wave:mode:{m}")
              for m, label in WAVE_MODES.items()]
     rows = [
@@ -318,6 +333,8 @@ def _wave_keyboard(mode: str = "default", own_account: bool = True) -> InlineKey
          InlineKeyboardButton(text="🔄 Новая волна", callback_data="wave:new")],
         modes[:2],
         modes[2:],
+        [InlineKeyboardButton(text=f"🎭 Настроение: {MOODS[mood]}" if mood in MOODS else "🎭 Настроение",
+                              callback_data="mood:menu")],
     ]
     if not own_account:
         rows.append([connect_button()])
@@ -394,11 +411,13 @@ async def _send_wave(bot, chat_id: int, user_id: int, continue_wave: bool) -> No
         if continue_wave and state.get("seeds"):
             seeds = state["seeds"]  # продолжаем ту же волну
     wave_state = {"session_id": state.get("session_id"), "played": state.get("played", []),
-                  "mode": state.get("mode", "default"), "seeds": state.get("seeds")}
+                  "mode": state.get("mode", "default"), "seeds": state.get("seeds"),
+                  "mood": state.get("mood")}
     tracks, wave_state = await mix(WAVE_SIZE, state=wave_state, new=not continue_wave,
-                                   token=wave_token, seeds=seeds, incognito=not wave_token)
+                                   token=wave_token, seeds=seeds, incognito=not wave_token,
+                                   mood=state.get("mood"))
     if not tracks:
-        await status.edit_text("😔 Не удалось получить волну. Попробуйте позже.")
+        await bot.edit_message_text(chat_id=chat_id, message_id=status.message_id, text="😔 Не удалось получить волну. Попробуйте позже.")
         return
 
     # Скачиваем параллельно, но не больше 3 треков одновременно
@@ -414,7 +433,7 @@ async def _send_wave(bot, chat_id: int, user_id: int, continue_wave: bool) -> No
 
     prepared = [(t, p) for t, p in await asyncio.gather(*(prep(t) for t in tracks)) if p]
     if not prepared:
-        await status.edit_text("😔 Не удалось скачать песни волны. Попробуйте позже.")
+        await bot.edit_message_text(chat_id=chat_id, message_id=status.message_id, text="😔 Не удалось скачать песни волны. Попробуйте позже.")
         return
 
     try:
@@ -436,7 +455,7 @@ async def _send_wave(bot, chat_id: int, user_id: int, continue_wave: bool) -> No
                 fresh.append((t, p))
         prepared = fresh
         if not prepared:
-            await status.edit_text("😔 Не удалось отправить волну. Попробуйте позже.")
+            await bot.edit_message_text(chat_id=chat_id, message_id=status.message_id, text="😔 Не удалось отправить волну. Попробуйте позже.")
             return
         msgs = await _send_album(bot, chat_id, prepared)
 
@@ -454,13 +473,16 @@ async def _send_wave(bot, chat_id: int, user_id: int, continue_wave: bool) -> No
         pass
     control = await bot.send_message(
         chat_id,
-        f"🌊 Моя волна ({WAVE_MODES.get(wave_state['mode'], '')}): {_songs(len(msgs))} — {source_note}.\n"
+        f"🌊 Моя волна ({WAVE_MODES.get(wave_state['mode'], '')}"
+        + (f", {MOODS[wave_state['mood']]}" if wave_state.get("mood") in MOODS else "")
+        + f"): {_songs(len(msgs))} — {source_note}.\n"
         "Нажмите ▶️ на первой песне — остальные будут играть подряд.\n"
         "Ниже можно выбрать, какой будет следующая волна."
         + ("" if wave_token else (
             "\n\n🔗 Хотите, чтобы волна знала ваш вкус? Подключите свой Яндекс — "
             "это по желанию, подписка не нужна.")),
-        reply_markup=_wave_keyboard(wave_state["mode"], own_account=bool(wave_token)),
+        reply_markup=_wave_keyboard(wave_state["mode"], own_account=bool(wave_token),
+                                    mood=wave_state.get("mood")),
     )
     await db.music_db.waves.update_one(
         {"chat_id": chat_id},
@@ -481,6 +503,39 @@ async def wave_buttons(callback: CallbackQuery) -> None:
     await callback.answer("⏳ Собираю…")
     await _send_wave(callback.bot, callback.message.chat.id, callback.from_user.id,
                      continue_wave=callback.data == "wave:more")
+
+
+@router.message(F.text == BTN_MOOD)
+@router.message(Command("mood"))
+async def cmd_mood(message: Message) -> None:
+    if not hasattr(music_service, "my_mix"):
+        await message.answer("Настроение доступно только с Яндекс Музыкой.")
+        return
+    state = await db.music_db.waves.find_one({"chat_id": message.chat.id}) or {}
+    await message.answer("🎭 Какое у вас настроение? Соберу волну под него:",
+                         reply_markup=_mood_keyboard(state.get("mood")))
+
+
+@router.callback_query(F.data == "mood:menu")
+async def mood_menu(callback: CallbackQuery) -> None:
+    state = await db.music_db.waves.find_one({"chat_id": callback.message.chat.id}) or {}
+    await callback.message.answer("🎭 Какое у вас настроение? Соберу волну под него:",
+                                  reply_markup=_mood_keyboard(state.get("mood")))
+    await callback.answer()
+
+
+@router.callback_query(F.data.regexp(r"^mood:(none|active|fun|calm|sad|sport|sleep)$"))
+async def mood_chosen(callback: CallbackQuery) -> None:
+    mood = callback.data.split(":")[1]
+    mood = None if mood == "none" else mood
+    chat_id = callback.message.chat.id
+    await db.music_db.waves.update_one({"chat_id": chat_id}, {"$set": {"chat_id": chat_id, "mood": mood}}, upsert=True)
+    await callback.answer(f"Настроение: {MOODS[mood]}. Собираю волну…" if mood else "Обычная волна. Собираю…")
+    try:
+        await callback.message.delete()  # меню выбора больше не нужно
+    except Exception:
+        pass
+    await _send_wave(callback.bot, chat_id, callback.from_user.id, continue_wave=False)
 
 
 @router.callback_query(F.data.regexp(r"^wave:mode:(default|favorite|discover|popular)$"))

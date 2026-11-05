@@ -75,6 +75,20 @@ WAVE_MODES = {
 }
 
 
+# Настроение волны: настройка moodEnergy или отдельная станция занятия
+MOODS = {
+    "active": "🔥 Бодрое",
+    "fun": "😊 Весёлое",
+    "calm": "😌 Спокойное",
+    "sad": "😢 Грустное",
+    "sport": "🏃 Для спорта",
+    "sleep": "😴 Для сна",
+}
+# Как найти станцию занятия в списке станций Яндекса и чем заменить, если не нашлась
+ACTIVITY_WORDS = {"sport": ("спорт", "тренир", "бег"), "sleep": ("сон", "засып", "сна")}
+ACTIVITY_FALLBACK = {"sport": "active", "sleep": "calm"}
+
+
 class YandexService:
     """
     Все методы принимают token: аккаунт Яндекса, от имени которого делать запрос.
@@ -84,6 +98,7 @@ class YandexService:
     def __init__(self) -> None:
         self._clients: dict[str, ClientAsync] = {}
         self._lock = asyncio.Lock()
+        self._activities: Optional[dict[str, str]] = None
 
     async def client(self, token: Optional[str] = None) -> ClientAsync:
         token = token or settings.yandex_token
@@ -132,9 +147,27 @@ class YandexService:
             return []
         return _to_dicts(items, limit)
 
+    async def _activity_seed(self, mood: str) -> Optional[str]:
+        """Ищет станцию «для спорта» / «для сна» среди станций Яндекса (один раз)."""
+        if self._activities is None:
+            self._activities = {}
+            try:
+                client = await self.client()
+                for res in await client.rotor_stations_list(language="ru") or []:
+                    st = res.station
+                    if not st or not st.id or st.id.type != "activity":
+                        continue
+                    name = (st.name or "").lower()
+                    for key, words in ACTIVITY_WORDS.items():
+                        if key not in self._activities and any(w in name for w in words):
+                            self._activities[key] = f"{st.id.type}:{st.id.tag}"
+            except Exception as e:
+                print(f"Yandex Music stations error: {e}")
+        return self._activities.get(mood)
+
     async def my_mix(self, limit: int = 30, state: Optional[dict] = None, new: bool = True,
                      token: Optional[str] = None, seeds: Optional[list[str]] = None,
-                     incognito: bool = False) -> tuple[list[dict], dict]:
+                     incognito: bool = False, mood: Optional[str] = None) -> tuple[list[dict], dict]:
         """
         Волна через сессии ротора — так же, как в приложении Яндекс Музыки.
 
@@ -150,6 +183,14 @@ class YandexService:
         mode = state.get("mode", "default")
         base = list(seeds or ["user:onyourwave"])
         extra = [f"settingDiversity:{mode}"] if mode in WAVE_MODES and mode != "default" else []
+        if mood in ACTIVITY_WORDS:
+            station = await self._activity_seed(mood)
+            if station:
+                base = [station]  # волна станции «для спорта» / «для сна»
+            else:
+                extra.append(f"settingMoodEnergy:{ACTIVITY_FALLBACK[mood]}")
+        elif mood in MOODS:
+            extra.append(f"settingMoodEnergy:{mood}")
 
         items, ids = [], set(played)
 
@@ -172,7 +213,8 @@ class YandexService:
 
         try:
             client = await self.client(token)
-            session_id = None if new or state.get("seeds") != base else state.get("session_id")
+            session_id = (None if new or state.get("seeds") != base or state.get("mood") != mood
+                          else state.get("session_id"))
             if session_id is None:
                 session_id, first = await self._new_session(client, base, extra, queue(), incognito)
                 if session_id is None:
@@ -208,14 +250,20 @@ class YandexService:
 
         tracks = _to_dicts(items, limit)
         played = (played + [_to_ym_id(t["id"]) for t in tracks])[-500:]
-        return tracks, {"session_id": session_id, "played": played, "mode": mode, "seeds": base}
+        return tracks, {"session_id": session_id, "played": played, "mode": mode,
+                        "seeds": base, "mood": mood}
 
     async def _new_session(self, client, base: list[str], extra: list[str],
                            played: list[str], incognito: bool):
         """Возвращает (id сессии, первая порция треков) или (None, [])."""
         session, last_error = None, None
-        # Сначала все сиды сразу; если Яндекс не примет такой набор — только первый
-        for seeds in ([*base, *extra], [base[0], *extra]) if len(base) > 1 else ([*base, *extra],):
+        # Сначала все сиды сразу; если Яндекс не примет такой набор — проще
+        attempts = [[*base, *extra]]
+        if len(base) > 1:
+            attempts.append([base[0], *extra])
+        if extra:
+            attempts.append(list(base))  # без настроек характера и настроения
+        for seeds in attempts:
             try:
                 session = await client.rotor_session_new(
                     seeds=seeds, queue=played[-300:], include_tracks_in_response=True,
