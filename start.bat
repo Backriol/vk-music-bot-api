@@ -36,6 +36,8 @@ if not exist ".env" (
     if errorlevel 1 goto :fail
 )
 
+venv\Scripts\python.exe ensure_settings.py
+
 where ffmpeg >nul 2>nul
 if errorlevel 1 (
     echo.

@@ -80,7 +80,10 @@ def main():
 
         source_lines = ["MUSIC_SOURCE=vk", f"VK_TOKEN={vk_token}", f"VK_USER_AGENT={vk_user_agent}"]
 
-    print("\n3) Ссылка на базу MongoDB (mongodb+srv://...).")
+    print("\n3) Какое @имя бота показывать в кнопках и ссылках (если у бота несколько имён).")
+    bot_username = ask("Имя бота, например YanMusicapp (или Enter — основное): ", required=False).lstrip("@")
+
+    print("\n4) Ссылка на базу MongoDB (mongodb+srv://...).")
     print("   Если базы нет — просто нажмите Enter: история будет храниться")
     print("   только пока бот запущен.")
     mongo_url = ask("Ссылка на базу (или Enter): ", required=False)
@@ -88,6 +91,7 @@ def main():
     ENV.write_text(
         "\n".join([
             f"BOT_TOKEN={bot_token}",
+            f"BOT_USERNAME={bot_username}",
             *source_lines,
             f"MONGO_URL={mongo_url}",
             "DB_NAME=music_bot_db",
