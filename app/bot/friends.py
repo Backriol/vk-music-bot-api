@@ -14,6 +14,7 @@ from aiogram.filters import Command, CommandObject, CommandStart
 from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
 
 from app.bot.handlers import BTN_FRIENDS, _main_keyboard, _save_user, _send_results
+from app.bot.names import bot_username
 from app.core.database import db
 
 router = Router(name="friends")
@@ -152,8 +153,7 @@ async def toggle_invites(callback: CallbackQuery) -> None:
 
 @router.callback_query(F.data == "fr:add")
 async def add_friend_help(callback: CallbackQuery) -> None:
-    me = await callback.bot.me()
-    link = f"https://t.me/{me.username}?start=f_{callback.from_user.id}"
+    link = f"https://t.me/{await bot_username(callback.bot)}?start=f_{callback.from_user.id}"
     await callback.message.answer(
         "➕ Как добавить друга — два способа:\n\n"
         f"1️⃣ Перешлите другу эту ссылку:\n{link}\n"

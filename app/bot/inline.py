@@ -29,6 +29,7 @@ from app.bot.accounts import user_tokens
 from app.bot.audio import AudioDownloadError
 from app.bot.friends import archive
 from app.bot.handlers import BOT_ID, _add_history, _cache_file_id, _fmt_duration, _prepare_audio
+from app.bot.names import bot_username
 from app.core.database import db
 from app.services.source import music_service
 
@@ -66,8 +67,8 @@ async def inline_search(query: InlineQuery) -> None:
         if not tracks and hasattr(music_service, "chart_tracks"):
             tracks = await music_service.chart_tracks(RESULTS)
 
-    me = await query.bot.me()
-    kb = _bot_button(me.username)
+    name = await bot_username(query.bot)
+    kb = _bot_button(name)
     ids = [t["id"] for t in tracks]
     cached = {
         d["track_id"]: d["file_id"]
@@ -111,8 +112,8 @@ async def inline_chosen(chosen: ChosenInlineResult) -> None:
         return
     bot = chosen.bot
     user_id = chosen.from_user.id
-    me = await bot.me()
-    kb = _bot_button(me.username)
+    name = await bot_username(bot)
+    kb = _bot_button(name)
 
     async def fail(text: str) -> None:
         try:
@@ -142,7 +143,7 @@ async def inline_chosen(chosen: ChosenInlineResult) -> None:
             )
         except Exception as e:
             logger.warning("inline upload to %s failed: %s", user_id, e)
-            await fail(f"Чтобы отправлять песни, откройте @{me.username} и нажмите «Start», затем попробуйте снова.")
+            await fail(f"Чтобы отправлять песни, откройте @{name} и нажмите «Start», затем попробуйте снова.")
             return
         file_id = msg.audio.file_id
         await _cache_file_id(track_id, msg, meta)

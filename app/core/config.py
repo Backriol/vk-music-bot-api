@@ -5,6 +5,9 @@ class Settings(BaseSettings):
     # Telegram Bot
     bot_token: str
     
+    # Какое @имя бота показывать в кнопках и ссылках (если у бота их несколько)
+    bot_username: str = ""
+
     # URL Telegram Mini App (https). Если задан — бот покажет кнопку открытия плеера
     webapp_url: Optional[str] = None
     # Запускать бота вместе с API (в lifespan FastAPI).
