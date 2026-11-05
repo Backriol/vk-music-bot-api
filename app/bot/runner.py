@@ -70,7 +70,6 @@ async def setup_bot(bot: Bot) -> None:
         BotCommand(command="start", description="Начать"),
         BotCommand(command="chart", description="Чарты"),
         BotCommand(command="wave", description="Моя волна — песни подряд"),
-        BotCommand(command="recommend", description="Подборка списком"),
         BotCommand(command="friends", description="Друзья и их архивы"),
         BotCommand(command="yandex", description="Подключить свой Яндекс"),
         BotCommand(command="clear", description="Удалить присланные песни"),

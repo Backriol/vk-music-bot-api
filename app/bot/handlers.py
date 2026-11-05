@@ -52,6 +52,17 @@ def _remember(chat_id: int, message_id: int, tracks: list[dict]) -> None:
         _results.popitem(last=False)
 
 
+def _songs(n: int) -> str:
+    """1 песня, 3 песни, 10 песен."""
+    if n % 10 == 1 and n % 100 != 11:
+        word = "песня"
+    elif 2 <= n % 10 <= 4 and not 12 <= n % 100 <= 14:
+        word = "песни"
+    else:
+        word = "песен"
+    return f"{n} {word}"
+
+
 def _fmt_duration(seconds: int | None) -> str:
     seconds = seconds or 0
     return f"{seconds // 60}:{seconds % 60:02d}"
@@ -149,8 +160,9 @@ async def cmd_help(message: Message) -> None:
         f"{BTN_CHART} — самые популярные песни.\n"
         f"{BTN_WAVE} — 10 песен альбомом: нажмите на первую, и они будут играть подряд.\n"
         "Перед новой волной старая удаляется, чтобы плеер не играл прошлые песни.\n"
+        f"{BTN_FRIENDS} — друзья и их последние 50 песен.\n"
         f"{BTN_CLEAR} — удалить из чата все песни от бота (Telegram позволяет только за последние 48 часов).\n"
-        "/recommend — подборка списком."
+        + ("/yandex — подключить свой Яндекс, чтобы волна знала ваш вкус (по желанию).\n" if yandex_enabled() else "")
     )
 
 
@@ -163,32 +175,6 @@ async def cmd_chart(message: Message) -> None:
     if not tracks:
         tracks = await music_service.search_tracks("Top 100", limit=SEARCH_LIMIT)
     await _send_results(message, tracks, "📈 Чарт — самое популярное сейчас:")
-
-
-@router.message(Command("recommend"))
-async def cmd_recommend(message: Message) -> None:
-    await message.bot.send_chat_action(message.chat.id, ChatAction.TYPING)
-    # 1. Персональная подборка источника («Моя волна» в Яндекс Музыке)
-    mix = getattr(music_service, "my_mix", None)
-    wave_token, _ = await user_tokens(message.from_user.id)
-    # Персональная волна — только по своему подключённому Яндексу
-    tracks = (await mix(SEARCH_LIMIT, token=wave_token))[0] if mix and wave_token else []
-    if tracks:
-        await _send_results(message, tracks, "🎧 Ваш микс:")
-        return
-
-    # 2. По истории прослушиваний в боте
-    last = await db.music_db.history.find_one(
-        {"user_id": message.from_user.id}, sort=[("listened_at", -1)]
-    )
-    if last and last.get("artist") and last["artist"] != "Unknown":
-        tracks = await music_service.search_tracks(last["artist"], limit=SEARCH_LIMIT)
-        tracks = [t for t in tracks if t["id"] != last.get("track_id")]
-        header = f"🎯 Похожее на «{last['artist']}»:"
-    else:
-        tracks = await music_service.search_tracks("Top 100", limit=SEARCH_LIMIT)
-        header = "🔥 Популярное:"
-    await _send_results(message, tracks, header)
 
 
 @router.callback_query(F.data == "noop")
@@ -380,7 +366,7 @@ async def _send_album(bot, chat_id: int, prepared: list) -> list[Message]:
 async def _send_wave(bot, chat_id: int, user_id: int, continue_wave: bool) -> None:
     mix = getattr(music_service, "my_mix", None)
     if mix is None:
-        await bot.send_message(chat_id, "Моя волна доступна только с Яндекс Музыкой. Попробуйте /recommend.")
+        await bot.send_message(chat_id, "Моя волна доступна только с Яндекс Музыкой. Напишите название песни — я её найду.")
         return
 
     state = await db.music_db.waves.find_one({"chat_id": chat_id}) or {}
@@ -468,10 +454,12 @@ async def _send_wave(bot, chat_id: int, user_id: int, continue_wave: bool) -> No
         pass
     control = await bot.send_message(
         chat_id,
-        f"🌊 Моя волна ({WAVE_MODES.get(wave_state['mode'], '')}): {len(msgs)} песен — {source_note}.\n"
+        f"🌊 Моя волна ({WAVE_MODES.get(wave_state['mode'], '')}): {_songs(len(msgs))} — {source_note}.\n"
         "Нажмите ▶️ на первой песне — остальные будут играть подряд.\n"
         "Ниже можно выбрать, какой будет следующая волна."
-        + ("" if wave_token else "\n\n🔗 Подключите свой Яндекс — и это будет ваша настоящая «Моя волна»."),
+        + ("" if wave_token else (
+            "\n\n🔗 Хотите, чтобы волна знала ваш вкус? Подключите свой Яндекс — "
+            "это по желанию, подписка не нужна.")),
         reply_markup=_wave_keyboard(wave_state["mode"], own_account=bool(wave_token)),
     )
     await db.music_db.waves.update_one(
@@ -521,7 +509,7 @@ async def cmd_clear(message: Message) -> None:
         await message.delete()
     except Exception:
         pass
-    note = await message.answer(f"🧹 Удалено песен: {deleted}." + (
+    note = await message.answer(f"🧹 Удалено: {_songs(deleted)}." + (
         "" if deleted else "\nTelegram не даёт боту удалять сообщения старше 48 часов — "
                            "их можно удалить вручную или очистить историю чата."))
     await asyncio.sleep(5)
