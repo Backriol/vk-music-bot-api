@@ -105,6 +105,11 @@ async def _friends_menu(user_id: int) -> tuple[str, InlineKeyboardMarkup]:
         text="🔔 Разрешить приглашения" if blocked else "🔕 Запретить приглашения",
         callback_data="fr:allow" if blocked else "fr:block",
     )])
+    u = await db.music_db.users.find_one({"id": user_id}) or {}
+    rows.append([InlineKeyboardButton(
+        text="🤫 Разрешить анонимные посвящения" if u.get("anon_blocked") else "🙅 Запретить анонимные посвящения",
+        callback_data="fr:anon:1" if u.get("anon_blocked") else "fr:anon:0",
+    )])
     if ids:
         text = f"👥 Ваши друзья ({len(ids)}). Нажмите на друга, чтобы открыть его архив — последние {ARCHIVE_SIZE} песен."
     else:
@@ -147,6 +152,17 @@ async def toggle_invites(callback: CallbackQuery) -> None:
         else "🔔 Приглашения снова разрешены.",
         show_alert=True,
     )
+    text, kb = await _friends_menu(callback.from_user.id)
+    await callback.message.edit_text(text, reply_markup=kb)
+
+
+@router.callback_query(F.data.in_({"fr:anon:0", "fr:anon:1"}))
+async def toggle_anon(callback: CallbackQuery) -> None:
+    allow = callback.data.endswith("1")
+    await db.music_db.users.update_one({"id": callback.from_user.id},
+                                       {"$set": {"anon_blocked": not allow}}, upsert=True)
+    await callback.answer("Анонимные посвящения разрешены." if allow
+                          else "Анонимные посвящения больше не будут приходить.", show_alert=True)
     text, kb = await _friends_menu(callback.from_user.id)
     await callback.message.edit_text(text, reply_markup=kb)
 
@@ -287,6 +303,14 @@ async def open_archive(callback: CallbackQuery) -> None:
     if not tracks:
         await callback.message.answer("Архив пока пуст — здесь появятся песни, которые человек слушал через бота.")
         return
+    from app.bot.social import reaction_badges  # здесь, чтобы не было циклического импорта
+
+    badges = await reaction_badges(owner, [t["id"] for t in tracks])
+    for t in tracks:
+        t["cb"] = f"ft:{owner}:{t['id']}"  # песня из архива: с реакциями и посвящением
+        t["badge"] = badges.get(t["id"], "")
+    if owner != me_id:
+        header += "\nПод песней можно поставить реакцию — друг её увидит."
     await _send_results(callback.message, tracks, header)
 
 

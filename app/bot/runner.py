@@ -14,6 +14,7 @@ from datetime import datetime
 
 from app.bot.accounts import router as accounts_router
 from app.bot.friends import router as friends_router
+from app.bot.social import router as social_router
 from app.bot.handlers import BOT_ID, router
 from app.bot.inline import router as inline_router
 from app.core.database import db
@@ -60,6 +61,7 @@ def create_bot() -> tuple[Bot, Dispatcher]:
     dp.update.outer_middleware(remember_user)
     dp.include_router(inline_router)
     dp.include_router(accounts_router)
+    dp.include_router(social_router)  # раньше поиска: ловит текст подписи к посвящению
     dp.include_router(friends_router)  # раньше общего поиска, который ловит любой текст
     dp.include_router(router)
     return bot, dp

@@ -76,8 +76,9 @@ def _results_keyboard(tracks: list[dict], page: int) -> InlineKeyboardMarkup:
     rows = []
     for t in chunk:
         dur = f" ({_fmt_duration(t['duration'])})" if t.get("duration") else ""
-        text = f"{t['artist']} — {t['title']}{dur}"
-        rows.append([InlineKeyboardButton(text=text[:64], callback_data=f"t:{t['id']}")])
+        text = f"{t['artist']} — {t['title']}{dur}{t.get('badge', '')}"
+        # cb — своё действие для кнопки (например, песня из архива друга)
+        rows.append([InlineKeyboardButton(text=text[:64], callback_data=t.get("cb") or f"t:{t['id']}")])
 
     if pages > 1:
         nav = []
@@ -265,36 +266,32 @@ async def _delete_sent(bot, chat_id: int, kind: str | None = None) -> int:
     return deleted
 
 
-@router.callback_query(F.data.startswith("t:"))
-async def send_track(callback: CallbackQuery) -> None:
-    track_id = callback.data.split(":", 1)[1]
-    if not TRACK_ID_RE.match(track_id):
-        await callback.answer("Некорректный трек", show_alert=True)
-        return
+def dedicate_button(track_id: str) -> InlineKeyboardButton:
+    return InlineKeyboardButton(text="💌 Посвятить другу", callback_data=f"ded:{track_id}")
 
-    await callback.answer("⏳ Загружаю…")
-    chat_id = callback.message.chat.id
-    bot = callback.bot
-    await bot.send_chat_action(chat_id, ChatAction.UPLOAD_VOICE)
-    _, download_token = await user_tokens(callback.from_user.id)
 
+async def deliver_track(bot, chat_id: int, track_id: str, *, user_id: int | None = None,
+                        reply_markup=None, caption: str | None = None, history: bool = True):
+    """
+    Присылает песню в чат. user_id — чей аккаунт Яндекса использовать для скачивания
+    и в чью историю записать. Возвращает (сообщение, данные песни) или None
+    (тогда пользователю уже сообщено об ошибке).
+    """
+    _, download_token = await user_tokens(user_id) if user_id else (None, None)
     for attempt in range(2):
         try:
             prepared = await _prepare_audio(track_id, download_token)
         except AudioDownloadError as e:
             logger.error("download failed for %s: %s", track_id, e)
             await bot.send_message(chat_id, f"⚠️ Не удалось скачать трек: {e}")
-            return
+            return None
         if not prepared:
             await bot.send_message(chat_id, "🚫 Трек недоступен (удалён или ограничен правообладателем).")
-            return
+            return None
         media, meta, cached = prepared
+        extra = {} if cached else {"title": meta["title"], "performer": meta["artist"], "duration": meta["duration"]}
         try:
-            if cached:
-                msg = await bot.send_audio(chat_id, media)
-            else:
-                msg = await bot.send_audio(chat_id, media, title=meta["title"],
-                                           performer=meta["artist"], duration=meta["duration"])
+            msg = await bot.send_audio(chat_id, media, reply_markup=reply_markup, caption=caption, **extra)
             break
         except Exception as e:
             if cached and attempt == 0:  # file_id мог стать невалидным — скачаем заново
@@ -306,7 +303,23 @@ async def send_track(callback: CallbackQuery) -> None:
     if not cached:
         await _cache_file_id(track_id, msg, meta)
     await _remember_sent(chat_id, [msg.message_id], "track")
-    await _add_history(callback.from_user.id, track_id, meta["title"], meta["artist"], meta["duration"])
+    if history and user_id:
+        await _add_history(user_id, track_id, meta["title"], meta["artist"], meta["duration"])
+    return msg, meta
+
+
+@router.callback_query(F.data.startswith("t:"))
+async def send_track(callback: CallbackQuery) -> None:
+    track_id = callback.data.split(":", 1)[1]
+    if not TRACK_ID_RE.match(track_id):
+        await callback.answer("Некорректный трек", show_alert=True)
+        return
+    await callback.answer("⏳ Загружаю…")
+    await callback.bot.send_chat_action(callback.message.chat.id, ChatAction.UPLOAD_VOICE)
+    await deliver_track(
+        callback.bot, callback.message.chat.id, track_id, user_id=callback.from_user.id,
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[[dedicate_button(track_id)]]),
+    )
 
 
 # ---------- Моя волна: песни альбомом, играют подряд ----------
