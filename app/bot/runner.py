@@ -14,7 +14,8 @@ from datetime import datetime
 
 from app.bot.accounts import router as accounts_router
 from app.bot.friends import router as friends_router
-from app.bot.handlers import router
+from app.bot.handlers import BOT_ID, router
+from app.bot.inline import router as inline_router
 from app.core.database import db
 from app.core.config import settings
 
@@ -26,6 +27,7 @@ _task: asyncio.Task | None = None
 
 
 _seen: dict[int, float] = {}
+_started: set[int] = set()
 
 
 async def remember_user(handler, event, data):
@@ -39,6 +41,13 @@ async def remember_user(handler, event, data):
                       "language_code": u.language_code or "en", "last_seen": datetime.utcnow()}},
             upsert=True,
         )
+    # Отмечаем, что человек открыл именно этого бота в личке — нужно для inline-режима
+    chat = data.get("event_chat")
+    if u and chat and chat.type == "private" and u.id not in _started and db.music_db is not None:
+        _started.add(u.id)
+        await db.music_db.users.update_one(
+            {"id": u.id}, {"$set": {"id": u.id}, "$addToSet": {"started_bots": BOT_ID}}, upsert=True
+        )
     return await handler(event, data)
 
 
@@ -49,6 +58,7 @@ def create_bot() -> tuple[Bot, Dispatcher]:
     )
     dp = Dispatcher()
     dp.update.outer_middleware(remember_user)
+    dp.include_router(inline_router)
     dp.include_router(accounts_router)
     dp.include_router(friends_router)  # раньше общего поиска, который ловит любой текст
     dp.include_router(router)
@@ -78,6 +88,7 @@ async def _polling(bot: Bot, dp: Dispatcher) -> None:
         await bot.delete_webhook(drop_pending_updates=False)
         me = await bot.get_me()
         print(f"🤖 Telegram bot @{me.username} started")
+        _warn_inline(me)
         await dp.start_polling(bot, handle_signals=False)
     except asyncio.CancelledError:
         raise
@@ -111,6 +122,13 @@ async def stop_bot() -> None:
     _bot = _dp = _task = None
 
 
+def _warn_inline(me) -> None:
+    if not me.supports_inline_queries:
+        print(f"[i] Чтобы песни можно было отправлять в любом чате, включите inline-режим:")
+        print(f"    @BotFather -> /setinline -> @{me.username} -> текст подсказки (например: Название песни)")
+        print(f"    @BotFather -> /setinlinefeedback -> @{me.username} -> Enabled")
+
+
 async def run_standalone() -> None:
     from app.core.database import close_mongo_connection, connect_to_mongo
 
@@ -119,6 +137,7 @@ async def run_standalone() -> None:
     bot, dp = create_bot()
     try:
         await setup_bot(bot)
+        _warn_inline(await bot.get_me())
         await bot.delete_webhook(drop_pending_updates=False)
         await dp.start_polling(bot)
     finally:

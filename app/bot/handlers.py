@@ -32,6 +32,10 @@ from app.services.source import music_service
 logger = logging.getLogger(__name__)
 router = Router(name="music")
 
+# file_id в Telegram действует только для бота, который загрузил файл,
+# поэтому кеш песен хранится отдельно для каждого бота
+BOT_ID = settings.bot_token.strip().strip("'\"").split(":")[0]
+
 PAGE_SIZE = 8
 SEARCH_LIMIT = 40
 TRACK_ID_RE = re.compile(r"^-?\d+_\d+$")
@@ -211,7 +215,7 @@ async def _prepare_audio(track_id: str, token: str | None = None):
     Возвращает (media, meta, cached): media — file_id или загруженный файл.
     None, если трек недоступен. Бросает AudioDownloadError при сбое скачивания.
     """
-    cached = await db.music_db.tg_audio.find_one({"track_id": track_id})
+    cached = await db.music_db.tg_audio.find_one({"track_id": track_id, "bot_id": BOT_ID})
     if cached:
         meta = {"title": cached["title"], "artist": cached["artist"], "duration": cached.get("duration", 0)}
         return cached["file_id"], meta, True
@@ -229,8 +233,8 @@ async def _cache_file_id(track_id: str, msg: Message, meta: dict) -> None:
     if not msg.audio:
         return
     await db.music_db.tg_audio.update_one(
-        {"track_id": track_id},
-        {"$set": {"track_id": track_id, "file_id": msg.audio.file_id,
+        {"track_id": track_id, "bot_id": BOT_ID},
+        {"$set": {"track_id": track_id, "bot_id": BOT_ID, "file_id": msg.audio.file_id,
                   "title": meta["title"], "artist": meta["artist"], "duration": meta["duration"],
                   "saved_at": datetime.utcnow()}},
         upsert=True,
@@ -304,7 +308,7 @@ async def send_track(callback: CallbackQuery) -> None:
         except Exception as e:
             if cached and attempt == 0:  # file_id мог стать невалидным — скачаем заново
                 logger.warning("cached file_id failed for %s: %s", track_id, e)
-                await db.music_db.tg_audio.delete_one({"track_id": track_id})
+                await db.music_db.tg_audio.delete_one({"track_id": track_id, "bot_id": BOT_ID})
                 continue
             raise
 
@@ -437,7 +441,7 @@ async def _send_wave(bot, chat_id: int, user_id: int, continue_wave: bool) -> No
         fresh = []
         for t, p in prepared:
             if p[2]:
-                await db.music_db.tg_audio.delete_one({"track_id": t["id"]})
+                await db.music_db.tg_audio.delete_one({"track_id": t["id"], "bot_id": BOT_ID})
                 try:
                     p = await _prepare_audio(t["id"], download_token)
                 except Exception:
