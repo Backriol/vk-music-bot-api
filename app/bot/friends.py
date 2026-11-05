@@ -95,10 +95,7 @@ async def _friends_menu(user_id: int) -> tuple[str, InlineKeyboardMarkup]:
     ids = await friend_ids(user_id)
     rows = [[InlineKeyboardButton(text="📜 Мой архив", callback_data="fa:me")]]
     for fid in ids:
-        rows.append([
-            InlineKeyboardButton(text=f"👤 {await display_name(fid)}"[:60], callback_data=f"fa:{fid}"),
-            InlineKeyboardButton(text="❌", callback_data=f"fx:{fid}"),
-        ])
+        rows.append([InlineKeyboardButton(text=f"👤 {await display_name(fid)}"[:60], callback_data=f"fc:{fid}")])
     rows.append([InlineKeyboardButton(text="➕ Добавить друга", callback_data="fr:add")])
     blocked = await invites_blocked(user_id)
     rows.append([InlineKeyboardButton(
@@ -111,7 +108,7 @@ async def _friends_menu(user_id: int) -> tuple[str, InlineKeyboardMarkup]:
         callback_data="fr:anon:1" if u.get("anon_blocked") else "fr:anon:0",
     )])
     if ids:
-        text = f"👥 Ваши друзья ({len(ids)}). Нажмите на друга, чтобы открыть его архив — последние {ARCHIVE_SIZE} песен."
+        text = f"👥 Ваши друзья ({len(ids)}). Нажмите на друга: архив его последних {ARCHIVE_SIZE} песен, совместимость и волна на двоих."
     else:
         text = "👥 У вас пока нет друзей в боте.\nНажмите «➕ Добавить друга»."
     if blocked:

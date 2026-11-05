@@ -393,7 +393,9 @@ async def _send_album(bot, chat_id: int, prepared: list) -> list[Message]:
     return await bot.send_media_group(chat_id, media=media)
 
 
-async def _send_wave(bot, chat_id: int, user_id: int, continue_wave: bool) -> None:
+async def _send_wave(bot, chat_id: int, user_id: int, continue_wave: bool,
+                     duo: tuple[list[str], str] | None = None) -> None:
+    """duo=(сиды, подпись) — «волна на двоих» по любимым песням двух друзей."""
     mix = getattr(music_service, "my_mix", None)
     if mix is None:
         await bot.send_message(chat_id, "Моя волна доступна только с Яндекс Музыкой. Напишите название песни — я её найду.")
@@ -417,7 +419,14 @@ async def _send_wave(bot, chat_id: int, user_id: int, continue_wave: bool) -> No
             pass
 
     wave_token, download_token = await user_tokens(user_id)
-    if wave_token:
+    duo_note = None
+    if duo:
+        seeds, duo_note = duo
+    elif continue_wave and state.get("duo_note") and state.get("seeds"):
+        seeds, duo_note = state["seeds"], state["duo_note"]  # продолжаем волну на двоих
+    if duo_note:
+        source_note = duo_note
+    elif wave_token:
         seeds, source_note = None, "ваша волна Яндекса"
     else:
         seeds, source_note = await _wave_seeds(user_id)
@@ -427,7 +436,8 @@ async def _send_wave(bot, chat_id: int, user_id: int, continue_wave: bool) -> No
                   "mode": state.get("mode", "default"), "seeds": state.get("seeds"),
                   "mood": state.get("mood")}
     tracks, wave_state = await mix(WAVE_SIZE, state=wave_state, new=not continue_wave,
-                                   token=wave_token, seeds=seeds, incognito=not wave_token,
+                                   token=wave_token, seeds=seeds,
+                                   incognito=not wave_token or bool(duo_note),
                                    mood=state.get("mood"))
     if not tracks:
         await bot.edit_message_text(chat_id=chat_id, message_id=status.message_id, text="😔 Не удалось получить волну. Попробуйте позже.")
@@ -499,7 +509,7 @@ async def _send_wave(bot, chat_id: int, user_id: int, continue_wave: bool) -> No
     )
     await db.music_db.waves.update_one(
         {"chat_id": chat_id},
-        {"$set": {"chat_id": chat_id, "user_id": user_id,
+        {"$set": {"chat_id": chat_id, "user_id": user_id, "duo_note": duo_note,
                   "control_id": control.message_id, **wave_state}},
         upsert=True,
     )
