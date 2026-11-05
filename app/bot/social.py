@@ -21,7 +21,7 @@ from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMar
 
 from app.bot.friends import are_friends, display_name, friend_ids
 from app.bot.handlers import (
-    BTN_CHART, BTN_CLEAR, BTN_FRIENDS, BTN_MIX_OLD, BTN_MOOD, BTN_WAVE,
+    BTN_CHART, BTN_CLEAR, BTN_FRIENDS, BTN_GAMES, BTN_MIX_OLD, BTN_MOOD, BTN_WAVE,
     TRACK_ID_RE, dedicate_button, deliver_track,
 )
 from app.core.database import db
@@ -29,7 +29,7 @@ from app.core.database import db
 router = Router(name="social")
 
 REACTIONS = {"f": "🔥", "h": "❤️", "l": "😂", "s": "😢"}
-MENU_BUTTONS = {BTN_CHART, BTN_CLEAR, BTN_FRIENDS, BTN_MIX_OLD, BTN_MOOD, BTN_WAVE}
+MENU_BUTTONS = {BTN_CHART, BTN_CLEAR, BTN_FRIENDS, BTN_GAMES, BTN_MIX_OLD, BTN_MOOD, BTN_WAVE}
 MAX_TEXT = 200
 DAILY_LIMIT = 30  # посвящений в сутки от одного человека — защита от спама
 

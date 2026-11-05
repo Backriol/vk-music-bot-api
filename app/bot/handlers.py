@@ -97,6 +97,7 @@ BTN_MIX_OLD = "🎧 Мой микс"  # кнопка из старой клав�
 BTN_CLEAR = "🧹 Очистить чат"
 BTN_FRIENDS = "👥 Друзья"
 BTN_MOOD = "🎭 Настроение"
+BTN_GAMES = "🎮 Игры"
 MOODS = {"active": "🔥 Бодрое", "fun": "😊 Весёлое", "calm": "😌 Спокойное",
          "sad": "😢 Грустное", "sport": "🏃 Для спорта", "sleep": "😴 Для сна"}
 WAVE_SIZE = 10  # максимум треков в одном альбоме Telegram
@@ -106,7 +107,7 @@ def _main_keyboard() -> ReplyKeyboardMarkup:
     rows = [
         [KeyboardButton(text=BTN_CHART), KeyboardButton(text=BTN_WAVE)],
         [KeyboardButton(text=BTN_MOOD), KeyboardButton(text=BTN_FRIENDS)],
-        [KeyboardButton(text=BTN_CLEAR)],
+        [KeyboardButton(text=BTN_GAMES), KeyboardButton(text=BTN_CLEAR)],
     ]
     if settings.webapp_url:
         rows.append([KeyboardButton(text="▶️ Открыть плеер", web_app=WebAppInfo(url=settings.webapp_url))])
@@ -167,6 +168,7 @@ async def cmd_help(message: Message) -> None:
         "Перед новой волной старая удаляется, чтобы плеер не играл прошлые песни.\n"
         f"{BTN_MOOD} — волна под настроение: бодрое, спокойное, для спорта, для сна…\n"
         f"{BTN_FRIENDS} — друзья и их последние 50 песен.\n"
+        f"{BTN_GAMES} — угадай мелодию, «Чей это трек?» и батл треков с друзьями.\n"
         f"{BTN_CLEAR} — удалить из чата все песни от бота (Telegram позволяет только за последние 48 часов).\n"
         + ("/yandex — подключить свой Яндекс, чтобы волна знала ваш вкус (по желанию).\n" if yandex_enabled() else "")
     )
