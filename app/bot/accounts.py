@@ -94,10 +94,10 @@ async def connect(callback: CallbackQuery) -> None:
     if old:
         old.cancel()
 
-    from yandex_music import ClientAsync
+    from app.services.yandex import make_client
 
     try:
-        code = await ClientAsync().request_device_code(device_name="Telegram music bot")
+        code = await make_client().request_device_code(device_name="Telegram music bot")
     except Exception as e:
         await callback.answer()
         await callback.message.answer(f"⚠️ Яндекс не ответил: {e}. Попробуйте позже.")
@@ -123,9 +123,9 @@ async def connect(callback: CallbackQuery) -> None:
 
 
 async def _wait_for_confirmation(bot, chat_id: int, user_id: int, code) -> None:
-    from yandex_music import ClientAsync
+    from app.services.yandex import make_client
 
-    client = ClientAsync()
+    client = make_client()
     loop = asyncio.get_running_loop()
     deadline = loop.time() + code.expires_in
     try:

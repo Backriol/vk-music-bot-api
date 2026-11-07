@@ -12,6 +12,7 @@ from dataclasses import dataclass
 from typing import Optional
 
 from yandex_music import ClientAsync
+from yandex_music.utils.request_async import Request
 
 from app.core.config import settings
 
@@ -89,6 +90,13 @@ ACTIVITY_WORDS = {"sport": ("спорт", "тренир", "бег"), "sleep": ("
 ACTIVITY_FALLBACK = {"sport": "active", "sleep": "calm"}
 
 
+def make_client(token: Optional[str] = None) -> ClientAsync:
+    """Клиент Яндекс Музыки; при YANDEX_PROXY — через «мост» в Россию."""
+    if settings.yandex_proxy:
+        return ClientAsync(token, request=Request(proxy_url=settings.yandex_proxy))
+    return ClientAsync(token)
+
+
 class YandexService:
     """
     Все методы принимают token: аккаунт Яндекса, от имени которого делать запрос.
@@ -104,7 +112,7 @@ class YandexService:
         token = token or settings.yandex_token
         async with self._lock:
             if token not in self._clients:
-                self._clients[token] = await ClientAsync(token).init()
+                self._clients[token] = await make_client(token).init()
             return self._clients[token]
 
     def forget(self, token: str) -> None:
@@ -112,7 +120,7 @@ class YandexService:
 
     async def account_info(self, token: str) -> dict:
         """Проверка токена пользователя: имя аккаунта и наличие Плюса."""
-        client = await ClientAsync(token).init()
+        client = await make_client(token).init()
         me = client.me
         account = me.account if me else None
         return {

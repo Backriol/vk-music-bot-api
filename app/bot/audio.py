@@ -29,7 +29,7 @@ async def _download_direct(url: str) -> bytes:
     headers = {"User-Agent": settings.vk_user_agent}
     try:
         async with aiohttp.ClientSession(timeout=timeout, headers=headers) as session:
-            async with session.get(url) as resp:
+            async with session.get(url, proxy=settings.yandex_proxy or None) as resp:
                 if resp.status != 200:
                     raise AudioDownloadError(f"Сервер вернул HTTP {resp.status}")
                 data = bytearray()
@@ -46,6 +46,7 @@ async def _run_ffmpeg(url: str, codec_args: list[str]) -> bytes:
     cmd = [
         "ffmpeg", "-hide_banner", "-loglevel", "error",
         "-user_agent", settings.vk_user_agent,
+        *(["-http_proxy", settings.yandex_proxy] if settings.yandex_proxy else []),
         "-i", url,
         "-vn", *codec_args,
         "-f", "mp3", "pipe:1",

@@ -22,10 +22,12 @@ async def main() -> int:
         return 1
 
     import aiohttp
-    from yandex_music import ClientAsync
+    from app.services.yandex import make_client
 
+    if settings.yandex_proxy:
+        print(f"ℹ️  Запросы к Яндексу идут через мост: {settings.yandex_proxy}")
     try:
-        client = await ClientAsync(settings.yandex_token).init()
+        client = await make_client(settings.yandex_token).init()
     except Exception as e:
         print(f"❌ Яндекс Музыка не отвечает или токен недействителен: {e}")
         return 1
@@ -61,6 +63,7 @@ async def main() -> int:
     try:
         async with aiohttp.ClientSession() as session:
             async with session.get(best.direct_link, headers={"Range": "bytes=0-65535"},
+                                   proxy=settings.yandex_proxy or None,
                                    timeout=aiohttp.ClientTimeout(total=30)) as resp:
                 ok = resp.status in (200, 206) and len(await resp.read()) > 1000
     except Exception as e:

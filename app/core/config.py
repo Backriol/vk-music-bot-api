@@ -19,6 +19,9 @@ class Settings(BaseSettings):
 
     # Яндекс Музыка (OAuth-токен; для полных треков нужна подписка Плюс)
     yandex_token: str = ""
+    # HTTP-прокси для запросов к Яндексу (если сервер в стране, где Яндекс Музыка недоступна),
+    # например http://127.0.0.1:8888 — туннель к серверу в России (deploy/bridge.sh)
+    yandex_proxy: str = ""
 
     # VK API
     vk_token: str = ""

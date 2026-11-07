@@ -84,8 +84,8 @@ def main():
     bot_username = ask("Имя бота, например YanMusicapp (или Enter — основное): ", required=False).lstrip("@")
 
     print("\n4) Ссылка на базу MongoDB (mongodb+srv://...).")
-    print("   Если базы нет — просто нажмите Enter: история будет храниться")
-    print("   только пока бот запущен.")
+    print("   Если базы нет — просто нажмите Enter: данные будут храниться в файле bot_data.json.")
+    print("   (На сервере MongoDB подключится автоматически.)")
     mongo_url = ask("Ссылка на базу (или Enter): ", required=False)
 
     ENV.write_text(
