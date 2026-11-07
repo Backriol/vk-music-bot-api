@@ -138,6 +138,12 @@ fi
 chown -R musicbot:musicbot "$DIR"
 chmod 600 .env
 
+say "Проверяю, отдаёт ли Яндекс Музыка песни этому серверу"
+if ! sudo -u musicbot "$DIR/venv/bin/python" check_yandex.py; then
+    warn "С Яндекс Музыкой проблема (см. выше). Бот запустится, но песни могут не скачиваться."
+    warn "Пришлите этот текст Claude — подскажет, что делать."
+fi
+
 say "6/6 Включаю автозапуск"
 cat > /etc/systemd/system/$SERVICE.service <<UNIT
 [Unit]
