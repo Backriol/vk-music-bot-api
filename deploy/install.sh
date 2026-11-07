@@ -28,6 +28,28 @@ if [ "$(id -u)" -ne 0 ]; then
     exit 1
 fi
 
+say "Проверяю, видит ли сервер Telegram и Яндекс Музыку"
+check() {  # $1 — название, $2 — адрес
+    if curl -s -o /dev/null --max-time 15 "$2"; then
+        echo "  ✅ $1 доступен"
+    else
+        warn "$1 недоступен с этого сервера ($2)"
+        return 1
+    fi
+}
+NET_OK=1
+check "Telegram" "https://api.telegram.org" || NET_OK=0
+check "Яндекс Музыка" "https://api.music.yandex.net" || NET_OK=0
+if [ "$NET_OK" = 0 ]; then
+    warn "Бот на этом сервере работать не сможет. Лучше выбрать сервер в другом регионе (например, Казахстан)."
+    if : </dev/tty 2>/dev/null; then
+        read -r -p "Всё равно продолжить установку? (да/нет): " ans </dev/tty
+        case "$ans" in д*|Д*|y*|Y*) ;; *) exit 1 ;; esac
+    else
+        exit 1
+    fi
+fi
+
 say "1/6 Устанавливаю Python, ffmpeg и git"
 export DEBIAN_FRONTEND=noninteractive
 apt-get update -qq
