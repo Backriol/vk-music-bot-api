@@ -31,6 +31,21 @@ MongoDB не обязательна: без `MONGO_URL` данные (друзь
 При переносе бота в новую папку скопируйте `.env` и `bot_data.json`.
 В `bot_data.json` лежат токены подключённых аккаунтов Яндекса — не передавайте его никому.
 
+## 🖥 Сервер (круглосуточная работа)
+
+На чистом Ubuntu 22.04/24.04 (хватит 1 ядра и 1–2 ГБ памяти):
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/Backriol/vk-music-bot-api/feature/telegram-bot/deploy/install.sh -o install.sh
+sudo bash install.sh
+```
+
+Скрипт ставит Python, ffmpeg и MongoDB (если её серверы недоступны — данные
+остаются в `bot_data.json`), бота в `/opt/musicbot` и сервис `musicbot` с
+автоперезапуском. Если перед запуском положить `.env` и `bot_data.json` в
+домашнюю папку, он заберёт их, а данные из `bot_data.json` при первом старте
+перенесутся в MongoDB. Повторный запуск скрипта обновляет бота.
+
 ## 🛠 Установка
 
 1. **Клонируйте репозиторий**

@@ -9,6 +9,22 @@ from app.core.config import settings
 DATA_FILE = Path(settings.data_file)
 SAVE_EVERY = 30  # секунд
 
+# «Оглавление» базы: без индексов поиск по истории и кешу тормозит при тысячах записей
+INDEXES = {
+    "users": [[("id", 1)], [("username", 1)]],
+    "history": [[("user_id", 1), ("listened_at", -1)], [("user_id", 1), ("source", 1), ("listened_at", -1)]],
+    "tg_audio": [[("track_id", 1), ("bot_id", 1)]],
+    "sent_audio": [[("chat_id", 1), ("kind", 1)]],
+    "waves": [[("chat_id", 1)]],
+    "friends": [[("a", 1), ("b", 1)], [("b", 1)]],
+    "friend_requests": [[("to", 1)], [("from", 1), ("to", 1)]],
+    "reactions": [[("owner", 1), ("track_id", 1)]],
+    "dedications": [[("id", 1)], [("from", 1), ("created", -1)]],
+    "game_questions": [[("id", 1)]],
+    "battles": [[("id", 1)]],
+    "scores": [[("user_id", 1)]],
+}
+
 
 class Database:
     client: AsyncIOMotorClient = None
@@ -55,6 +71,8 @@ async def _load_from_file() -> int:
         return 0
     total = 0
     for name, docs in data.items():
+        for d in docs:
+            d.pop("_id", None)
         if docs:
             await db.music_db[name].insert_many(docs)
             total += len(docs)
@@ -70,11 +88,31 @@ async def _autosave() -> None:
             print(f"⚠️  Не удалось сохранить данные: {e}")
 
 
+async def _ensure_indexes() -> None:
+    for collection, indexes in INDEXES.items():
+        for keys in indexes:
+            try:
+                await db.music_db[collection].create_index(keys)
+            except Exception as e:  # индекс — ускорение, а не необходимость
+                print(f"⚠️  Индекс {collection} {keys}: {e}")
+
+
 async def connect_to_mongo():
     if settings.mongo_url:
-        db.client = AsyncIOMotorClient(settings.mongo_url)
+        db.client = AsyncIOMotorClient(settings.mongo_url, serverSelectionTimeoutMS=10000)
         db.music_db = db.client[settings.db_name]
+        try:
+            await db.client.admin.command("ping")
+        except Exception as e:
+            raise SystemExit(f"❌ Не удалось подключиться к MongoDB ({settings.mongo_url}): {e}")
         print("✅ Connected to MongoDB")
+        # Переезд с файла: если база пустая, а рядом лежит bot_data.json — переносим всё в MongoDB
+        if DATA_FILE.exists() and not await db.music_db.users.find_one({}):
+            moved = await _load_from_file()
+            if moved:
+                os.replace(DATA_FILE, DATA_FILE.with_suffix(".imported"))
+                print(f"📦 Данные из {DATA_FILE.name} перенесены в MongoDB (записей: {moved})")
+        await _ensure_indexes()
         return
 
     from mongomock_motor import AsyncMongoMockClient
@@ -82,6 +120,7 @@ async def connect_to_mongo():
     db.music_db = db.client[settings.db_name]
     db.file_mode = True
     loaded = await _load_from_file()
+    await _ensure_indexes()
     db.saver = asyncio.create_task(_autosave())
     print(f"💾 База без MongoDB: данные сохраняются в файл {DATA_FILE.name}"
           + (f" (загружено записей: {loaded})" if loaded else ""))

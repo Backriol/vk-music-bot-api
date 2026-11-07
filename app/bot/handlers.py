@@ -623,3 +623,19 @@ async def _add_history(user_id: int, track_id: str, title: str, artist: str,
         "listened_at": datetime.utcnow(),
         "source": source,
     })
+    await _trim_history(user_id)
+
+
+HISTORY_KEEP = 500  # сколько последних песен хранить на человека
+
+
+async def _trim_history(user_id: int) -> None:
+    """Старые записи удаляем пачкой, когда история заметно перерастает лимит."""
+    if await db.music_db.history.count_documents({"user_id": user_id}) <= HISTORY_KEEP + 50:
+        return
+    cutoff = await db.music_db.history.find({"user_id": user_id}).sort("listened_at", -1) \
+        .skip(HISTORY_KEEP).limit(1).to_list(length=1)
+    if cutoff:
+        await db.music_db.history.delete_many(
+            {"user_id": user_id, "listened_at": {"$lte": cutoff[0]["listened_at"]}}
+        )
