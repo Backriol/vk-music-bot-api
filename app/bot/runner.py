@@ -19,6 +19,7 @@ from app.bot.duo import router as duo_router
 from app.bot.games import router as games_router
 from app.bot.handlers import BOT_ID, router
 from app.bot.inline import router as inline_router
+from app.bot.premium import limit_enabled, router as premium_router
 from app.core.database import db
 from app.core.config import settings
 
@@ -61,6 +62,7 @@ def create_bot() -> tuple[Bot, Dispatcher]:
     )
     dp = Dispatcher()
     dp.update.outer_middleware(remember_user)
+    dp.include_router(premium_router)
     dp.include_router(inline_router)
     dp.include_router(accounts_router)
     dp.include_router(social_router)  # раньше поиска: ловит текст подписи к посвящению
@@ -82,6 +84,8 @@ async def setup_bot(bot: Bot) -> None:
         BotCommand(command="yandex", description="Подключить свой Яндекс"),
         BotCommand(command="clear", description="Удалить присланные песни"),
         BotCommand(command="help", description="Помощь"),
+        *([BotCommand(command="premium", description="⭐ Премиум — без ограничений"),
+           BotCommand(command="paysupport", description="Помощь с оплатой")] if limit_enabled() else []),
     ])
     if settings.webapp_url:
         await bot.set_chat_menu_button(

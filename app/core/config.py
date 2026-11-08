@@ -23,6 +23,16 @@ class Settings(BaseSettings):
     # например http://127.0.0.1:8888 — туннель к серверу в России (deploy/bridge.sh)
     yandex_proxy: str = ""
 
+    # Лимит песен в день на человека. 0 — лимита нет (бот полностью бесплатный).
+    # Без лимита — подписчики Премиума, те, кто подключил свой Яндекс с Плюсом, и ADMIN_IDS.
+    daily_song_limit: int = 0
+    # Подписка «Премиум» в Telegram Stars: цена в звёздах за 30 дней
+    premium_stars: int = 20
+    # Telegram ID владельца/админов через запятую — без лимита
+    admin_ids: str = ""
+    # Контакт для вопросов об оплате (/paysupport), например @username
+    support_contact: str = ""
+
     # VK API
     vk_token: str = ""
     vk_user_agent: str = "VKAndroidApp/5.52-4543"

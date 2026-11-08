@@ -30,6 +30,7 @@ from app.bot.audio import AudioDownloadError
 from app.bot.friends import archive
 from app.bot.handlers import BOT_ID, _add_history, _cache_file_id, _fmt_duration, _prepare_audio
 from app.bot.names import bot_username
+from app.bot.premium import count_songs, limit_text, songs_left
 from app.core.database import db
 from app.services.source import music_service
 
@@ -121,6 +122,9 @@ async def inline_chosen(chosen: ChosenInlineResult) -> None:
         except Exception:
             pass
 
+    if await songs_left(user_id) == 0:
+        await fail(limit_text().split("\n\n")[0] + f"\nПодробнее — в @{name}: /premium")
+        return
     _, download_token = await user_tokens(user_id)
     try:
         prepared = await _prepare_audio(track_id, download_token)
@@ -160,4 +164,5 @@ async def inline_chosen(chosen: ChosenInlineResult) -> None:
         logger.error("inline edit failed for %s: %s", track_id, e)
         await fail("⚠️ Не удалось отправить песню. Попробуйте ещё раз.")
         return
+    await count_songs(user_id)
     await _add_history(user_id, track_id, meta["title"], meta["artist"], meta["duration"], source="inline")

@@ -25,6 +25,7 @@ from aiogram.types import (
 
 from app.bot.accounts import connect_button, user_tokens, yandex_enabled
 from app.bot.audio import AudioDownloadError, fetch_mp3
+from app.bot.premium import count_songs, send_limit_message, songs_left
 from app.core.config import settings
 from app.core.database import db
 from app.services.source import music_service
@@ -279,6 +280,9 @@ async def deliver_track(bot, chat_id: int, track_id: str, *, user_id: int | None
     и в чью историю записать. Возвращает (сообщение, данные песни) или None
     (тогда пользователю уже сообщено об ошибке).
     """
+    if user_id and await songs_left(user_id) == 0:
+        await send_limit_message(bot, chat_id)
+        return None
     _, download_token = await user_tokens(user_id) if user_id else (None, None)
     for attempt in range(2):
         try:
@@ -305,6 +309,8 @@ async def deliver_track(bot, chat_id: int, track_id: str, *, user_id: int | None
     if not cached:
         await _cache_file_id(track_id, msg, meta)
     await _remember_sent(chat_id, [msg.message_id], "track")
+    if user_id:
+        await count_songs(user_id)
     if history and user_id:
         await _add_history(user_id, track_id, meta["title"], meta["artist"], meta["duration"])
     return msg, meta
@@ -403,6 +409,12 @@ async def _send_wave(bot, chat_id: int, user_id: int, continue_wave: bool,
         await bot.send_message(chat_id, "Моя волна доступна только с Яндекс Музыкой. Напишите название песни — я её найду.")
         return
 
+    left = await songs_left(user_id)
+    if left == 0:
+        await send_limit_message(bot, chat_id)
+        return
+    wave_size = WAVE_SIZE if left is None else min(WAVE_SIZE, left)
+
     state = await db.music_db.waves.find_one({"chat_id": chat_id}) or {}
     status = await bot.send_message(chat_id, "🌊 Собираю волну… это займёт до минуты.")
 
@@ -437,7 +449,7 @@ async def _send_wave(bot, chat_id: int, user_id: int, continue_wave: bool,
     wave_state = {"session_id": state.get("session_id"), "played": state.get("played", []),
                   "mode": state.get("mode", "default"), "seeds": state.get("seeds"),
                   "mood": state.get("mood")}
-    tracks, wave_state = await mix(WAVE_SIZE, state=wave_state, new=not continue_wave,
+    tracks, wave_state = await mix(wave_size, state=wave_state, new=not continue_wave,
                                    token=wave_token, seeds=seeds,
                                    incognito=not wave_token or bool(duo_note),
                                    mood=state.get("mood"))
@@ -488,6 +500,7 @@ async def _send_wave(bot, chat_id: int, user_id: int, continue_wave: bool,
         if not cached:
             await _cache_file_id(t["id"], msg, meta)
     await _remember_sent(chat_id, [m.message_id for m in msgs], "wave")
+    await count_songs(user_id, len(msgs))
     for t, (_, meta, _c) in prepared:
         await _add_history(user_id, t["id"], meta["title"], meta["artist"],
                            meta["duration"] or t.get("duration", 0), source="wave")
